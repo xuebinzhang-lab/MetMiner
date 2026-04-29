@@ -1,6 +1,19 @@
 # MetMiner v2 — Changelog
 
-## v0.1.0.9000 (development)
+## v0.1.0.9001 (development)
+
+### 2026-04-29 — Codex-assisted: MS2-audited ISF network workflow
+
+- Added audited MS2 evidence for ISF detection, including stricter post-`mutate_ms2()` assignment checks to reduce false feature-to-spectrum matches when broad MS1/MS2 tolerances are used.
+- Added optional MS2 ZIP upload and matching inside the Feature Network workflow after normalization, so discarded raw features are not needlessly matched to spectra.
+- Added positive/negative final merged feature networks with cross-polarity redundancy edges.
+- Refined the Feature Network UI: the sidebar stays open by default, parameter groups are collapsed, MS2 controls are conditional, and network rendering controls now live beside the relationship network panel.
+
+*Co-authored with Codex (OpenAI GPT-5)*
+
+---
+
+## v0.1.0.9000
 
 ### 2026-04-28 — Code refactoring & standardization
 

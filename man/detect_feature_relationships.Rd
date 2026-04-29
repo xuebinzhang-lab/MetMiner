@@ -17,6 +17,10 @@ detect_feature_relationships(
   isotope_intensity_ratio_max = 0.8,
   adduct_table = NULL,
   neutral_loss_table = NULL,
+  use_ms2 = TRUE,
+  ms2_mz_tol_ppm = 5,
+  ms2_rt_tol = 10,
+  ms2_fragment_mz_tol = 0.02,
   store = TRUE
 )
 }
@@ -49,6 +53,18 @@ monoisotopic peak.}
 
 \item{neutral_loss_table}{Optional neutral loss dictionary with columns
 `annotation` and `mass`.}
+
+\item{use_ms2}{Logical. If `TRUE`, add MS2 assignment-aware evidence for
+ISF edges when spectra are available in `object@ms2_data`.}
+
+\item{ms2_mz_tol_ppm}{Strict MS1-to-MS2 precursor m/z tolerance used to
+re-audit `mutate_ms2()` assignments before using MS2 evidence.}
+
+\item{ms2_rt_tol}{Strict MS1-to-MS2 precursor RT tolerance in seconds used
+to re-audit `mutate_ms2()` assignments before using MS2 evidence.}
+
+\item{ms2_fragment_mz_tol}{Absolute m/z tolerance used when checking whether
+an ISF feature m/z appears in a parent MS2 spectrum.}
 
 \item{store}{Logical. If `TRUE`, attach the network to `object@other_files`.}
 }

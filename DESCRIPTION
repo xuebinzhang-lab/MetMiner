@@ -1,11 +1,14 @@
 Package: MetMiner
 Title: An Amazing Shiny App
-Version: 0.1.0.9000
+Version: 0.1.0.9001
 Authors@R: 
-    person(given = "Xiao",
-           family = "Wang",
-           role = c("aut", "cre"),
-           email = "shawnwang2016@126.com")
+    c(person(given = "Xiao",
+             family = "Wang",
+             role = c("aut", "cre"),
+             email = "shawnwang2016@126.com"),
+      person(given = "Codex",
+             role = "ctb",
+             comment = "OpenAI coding agent"))
 Description: An Agentic, AI-Driven Platform for Robust Plant Metabolomics and ISF Deconvolution.
 License: MIT + file LICENSE
 Imports: 

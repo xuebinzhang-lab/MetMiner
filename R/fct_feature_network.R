@@ -28,6 +28,56 @@ extract_feature_network <- function(object) {
   normalize_feature_network(network)
 }
 
+#' Merge positive and negative mode feature networks
+#'
+#' Builds a final cross-polarity network by prefixing within-mode feature ids
+#' with `pos::` and `neg::`, then adding cross-polarity edges for features that
+#' likely represent the same neutral compound or a cross-polarity in-source
+#' fragment relationship.
+#'
+#' @param positive_object Optional positive-mode `mass_dataset`.
+#' @param negative_object Optional negative-mode `mass_dataset`.
+#' @param ppm Neutral mass tolerance in ppm.
+#' @param rt_tolerance Retention time tolerance in seconds.
+#' @param cor_cutoff Minimum abundance correlation across shared samples. Set
+#'   to `NULL` to skip this filter.
+#' @param neutral_loss_table Optional neutral loss dictionary with columns
+#'   `annotation` and `mass`.
+#' @param include_within_mode Include stored within-mode networks.
+#'
+#' @return A normalized feature network with polarity-prefixed feature ids.
+#' @export
+merge_polarity_feature_networks <- function(positive_object = NULL,
+                                            negative_object = NULL,
+                                            ppm = 10,
+                                            rt_tolerance = 5,
+                                            cor_cutoff = 0.7,
+                                            neutral_loss_table = NULL,
+                                            include_within_mode = TRUE) {
+  edges <- list()
+
+  if (isTRUE(include_within_mode) && !is.null(positive_object)) {
+    check_mass_dataset_object(positive_object)
+    edges$positive <- prefix_feature_network_ids(extract_feature_network(positive_object), "pos")
+  }
+  if (isTRUE(include_within_mode) && !is.null(negative_object)) {
+    check_mass_dataset_object(negative_object)
+    edges$negative <- prefix_feature_network_ids(extract_feature_network(negative_object), "neg")
+  }
+  if (!is.null(positive_object) && !is.null(negative_object)) {
+    edges$cross <- detect_cross_polarity_edges(
+      positive_object = positive_object,
+      negative_object = negative_object,
+      ppm = ppm,
+      rt_tolerance = rt_tolerance,
+      cor_cutoff = cor_cutoff,
+      neutral_loss_table = neutral_loss_table
+    )
+  }
+
+  normalize_feature_network(do.call(rbind, edges))
+}
+
 #' Convert a feature network edge table to an igraph object
 #'
 #' @param object A `mass_dataset` object.
@@ -362,6 +412,14 @@ default_plant_fragment_ion_table <- function() {
 #'   `mass_offset`, and optional `charge`.
 #' @param neutral_loss_table Optional neutral loss dictionary with columns
 #'   `annotation` and `mass`.
+#' @param use_ms2 Logical. If `TRUE`, add MS2 assignment-aware evidence for
+#'   ISF edges when spectra are available in `object@ms2_data`.
+#' @param ms2_mz_tol_ppm Strict MS1-to-MS2 precursor m/z tolerance used to
+#'   re-audit `mutate_ms2()` assignments before using MS2 evidence.
+#' @param ms2_rt_tol Strict MS1-to-MS2 precursor RT tolerance in seconds used
+#'   to re-audit `mutate_ms2()` assignments before using MS2 evidence.
+#' @param ms2_fragment_mz_tol Absolute m/z tolerance used when checking whether
+#'   an ISF feature m/z appears in a parent MS2 spectrum.
 #' @param store Logical. If `TRUE`, attach the network to `object@other_files`.
 #'
 #' @return If `store = TRUE`, an updated `mass_dataset`; otherwise an edge table.
@@ -378,6 +436,10 @@ detect_feature_relationships <- function(object,
                                          isotope_intensity_ratio_max = 0.8,
                                          adduct_table = NULL,
                                          neutral_loss_table = NULL,
+                                         use_ms2 = TRUE,
+                                         ms2_mz_tol_ppm = 5,
+                                         ms2_rt_tol = 10,
+                                         ms2_fragment_mz_tol = 0.02,
                                          store = TRUE) {
   check_mass_dataset_object(object)
   mode <- match.arg(mode)
@@ -436,6 +498,25 @@ detect_feature_relationships <- function(object,
       cor_method = cor_method,
       direction = "high_to_low"
     )
+    if (nrow(edges$isf) > 0) {
+      edges$isf$evidence_level <- "Rule"
+      edges$isf$evidence <- "neutral_loss_or_mass_difference"
+    }
+
+    if (isTRUE(use_ms2) && nrow(edges$isf) > 0) {
+      ms2_index <- prepare_ms2_feature_index(
+        object = object,
+        variable_info = variable_info,
+        mz_tol_ppm = ms2_mz_tol_ppm,
+        rt_tol_sec = ms2_rt_tol
+      )
+      edges$isf <- add_ms2_isf_evidence(
+        edges = edges$isf,
+        variable_info = variable_info,
+        ms2_index = ms2_index,
+        fragment_mz_tol = ms2_fragment_mz_tol
+      )
+    }
   }
 
   network <- normalize_feature_network(do.call(rbind, edges))
@@ -582,6 +663,174 @@ prepare_feature_network_data <- function(object) {
   list(variable_info = variable_info, expression_data = as.matrix(expression_data))
 }
 
+#' Audit MS2 assignments stored in a mass_dataset object
+#'
+#' `mutate_ms2()` can intentionally be run with broad MS1-to-MS2 matching
+#' tolerances to increase coverage. This helper re-checks those assignments
+#' against stricter m/z and RT tolerances and flags shared spectra before the
+#' spectra are used as ISF evidence.
+#'
+#' @param object A `mass_dataset` object.
+#' @param mz_tol_ppm Strict precursor m/z tolerance in ppm.
+#' @param rt_tol_sec Strict precursor RT tolerance in seconds.
+#'
+#' @return A data frame with one row per feature-MS2 assignment.
+#' @export
+audit_ms2_assignment <- function(object, mz_tol_ppm = 5, rt_tol_sec = 10) {
+  check_mass_dataset_object(object)
+  variable_info <- massdataset::extract_variable_info(object)
+  records <- collect_ms2_assignment_records(object, variable_info)
+  if (nrow(records$meta) == 0) {
+    return(empty_ms2_assignment_audit())
+  }
+  score_ms2_assignment_records(records$meta, mz_tol_ppm, rt_tol_sec)
+}
+
+empty_ms2_assignment_audit <- function() {
+  data.frame(
+    ms2_set = character(),
+    variable_id = character(),
+    feature_mz = numeric(),
+    feature_rt = numeric(),
+    ms2_spectrum_id = character(),
+    ms2_mz = numeric(),
+    ms2_rt = numeric(),
+    ms2_file = character(),
+    original_mz_tol = numeric(),
+    original_rt_tol = numeric(),
+    mz_error_ppm = numeric(),
+    rt_error_sec = numeric(),
+    within_strict_tol = logical(),
+    ms2_assignment_count = integer(),
+    shared_ms2 = logical(),
+    assignment_score = numeric(),
+    best_owner = logical(),
+    ms2_assignment_quality = character(),
+    stringsAsFactors = FALSE
+  )
+}
+
+collect_ms2_assignment_records <- function(object, variable_info) {
+  ms2_sets <- massdataset::extract_ms2_data(object)
+  if (length(ms2_sets) == 0) {
+    return(list(meta = empty_ms2_assignment_audit()[, 1:10], spectra = list()))
+  }
+
+  variable_info$variable_id <- as.character(variable_info$variable_id)
+  records <- list()
+  spectra <- list()
+  record_idx <- 1L
+
+  for (set_idx in seq_along(ms2_sets)) {
+    ms2_obj <- ms2_sets[[set_idx]]
+    set_name <- names(ms2_sets)[set_idx]
+    if (is.null(set_name) || is.na(set_name) || !nzchar(set_name)) {
+      set_name <- paste0("ms2_set_", set_idx)
+    }
+
+    variable_ids <- as.character(ms2_obj@variable_id)
+    if (length(variable_ids) == 0) {
+      next
+    }
+
+    vi_idx <- match(variable_ids, variable_info$variable_id)
+    n <- length(variable_ids)
+    record_key <- paste(set_name, seq_len(n), sep = "||")
+    spectra[record_key] <- ms2_obj@ms2_spectra
+
+    records[[record_idx]] <- data.frame(
+      ms2_set = rep(set_name, n),
+      variable_id = variable_ids,
+      feature_mz = variable_info$mz[vi_idx],
+      feature_rt = variable_info$rt[vi_idx],
+      ms2_spectrum_id = as.character(ms2_obj@ms2_spectrum_id),
+      ms2_mz = as.numeric(ms2_obj@ms2_mz),
+      ms2_rt = as.numeric(ms2_obj@ms2_rt),
+      ms2_file = as.character(ms2_obj@ms2_file),
+      original_mz_tol = rep(as.numeric(ms2_obj@mz_tol)[1], n),
+      original_rt_tol = rep(as.numeric(ms2_obj@rt_tol)[1], n),
+      record_key = record_key,
+      stringsAsFactors = FALSE
+    )
+    record_idx <- record_idx + 1L
+  }
+
+  if (length(records) == 0) {
+    return(list(meta = empty_ms2_assignment_audit()[, 1:10], spectra = list()))
+  }
+
+  list(meta = do.call(rbind, records), spectra = spectra)
+}
+
+score_ms2_assignment_records <- function(meta, mz_tol_ppm, rt_tol_sec) {
+  meta$mz_error_ppm <- abs(meta$feature_mz - meta$ms2_mz) / meta$ms2_mz * 1e6
+  meta$rt_error_sec <- abs(meta$feature_rt - meta$ms2_rt)
+  meta$within_strict_tol <- is.finite(meta$mz_error_ppm) &
+    is.finite(meta$rt_error_sec) &
+    meta$mz_error_ppm <= mz_tol_ppm &
+    meta$rt_error_sec <= rt_tol_sec
+
+  spectrum_key <- paste(meta$ms2_set, meta$ms2_file, meta$ms2_spectrum_id, sep = "||")
+  meta$ms2_assignment_count <- as.integer(ave(spectrum_key, spectrum_key, FUN = length))
+  meta$shared_ms2 <- meta$ms2_assignment_count > 1
+
+  meta$assignment_score <- (meta$mz_error_ppm / mz_tol_ppm)^2 +
+    (meta$rt_error_sec / rt_tol_sec)^2
+  meta$assignment_score[!is.finite(meta$assignment_score)] <- Inf
+
+  meta$best_owner <- FALSE
+  split_idx <- split(seq_len(nrow(meta)), spectrum_key)
+  for (idx in split_idx) {
+    valid_idx <- idx[meta$within_strict_tol[idx]]
+    if (length(valid_idx) == 0) {
+      next
+    }
+    best <- valid_idx[which.min(meta$assignment_score[valid_idx])]
+    meta$best_owner[best] <- TRUE
+  }
+
+  meta$ms2_assignment_quality <- ifelse(
+    !meta$within_strict_tol, "bad_match",
+    ifelse(meta$shared_ms2 & !meta$best_owner, "shared_non_owner",
+           ifelse(meta$shared_ms2, "shared_best_owner", "unique"))
+  )
+
+  meta[, colnames(empty_ms2_assignment_audit()), drop = FALSE]
+}
+
+prepare_ms2_feature_index <- function(object, variable_info, mz_tol_ppm, rt_tol_sec) {
+  records <- collect_ms2_assignment_records(object, variable_info)
+  if (nrow(records$meta) == 0) {
+    return(list(meta = empty_ms2_assignment_audit(), spectra = list()))
+  }
+
+  meta <- score_ms2_assignment_records(records$meta, mz_tol_ppm, rt_tol_sec)
+  meta$record_key <- records$meta$record_key
+  keep <- meta$ms2_assignment_quality != "bad_match"
+  if (!any(keep)) {
+    return(list(meta = empty_ms2_assignment_audit(), spectra = list()))
+  }
+
+  meta <- meta[keep, , drop = FALSE]
+  quality_rank <- c(unique = 1, shared_best_owner = 2, shared_non_owner = 3)
+  meta$quality_rank <- unname(quality_rank[meta$ms2_assignment_quality])
+  meta$quality_rank[is.na(meta$quality_rank)] <- 99
+
+  split_idx <- split(seq_len(nrow(meta)), meta$variable_id)
+  selected_idx <- vapply(split_idx, function(idx) {
+    idx[order(meta$quality_rank[idx], meta$assignment_score[idx], na.last = TRUE)][1]
+  }, integer(1))
+  meta <- meta[selected_idx, , drop = FALSE]
+  rownames(meta) <- meta$variable_id
+
+  spectra <- records$spectra[meta$record_key]
+  names(spectra) <- meta$variable_id
+  meta$record_key <- NULL
+  meta$quality_rank <- NULL
+
+  list(meta = meta, spectra = spectra)
+}
+
 empty_feature_network <- function() {
   data.frame(
     from = character(),
@@ -593,6 +842,19 @@ empty_feature_network <- function() {
     rt_diff = numeric(),
     abundance_cor = numeric(),
     qc_ratio_rsd = numeric(),
+    evidence_level = character(),
+    evidence = character(),
+    from_ms2_spectrum_id = character(),
+    to_ms2_spectrum_id = character(),
+    from_ms2_quality = character(),
+    to_ms2_quality = character(),
+    from_ms2_shared_n = integer(),
+    to_ms2_shared_n = integer(),
+    same_ms2_spectrum = logical(),
+    ms2_fragment_match = logical(),
+    ms2_similarity_score = numeric(),
+    ms2_matched_peaks = integer(),
+    ms2_matched_ratio = numeric(),
     stringsAsFactors = FALSE
   )
 }
@@ -612,6 +874,12 @@ normalize_feature_network <- function(feature_network) {
   feature_network$to <- as.character(feature_network$to)
   feature_network$type <- as.character(feature_network$type)
   feature_network$annotation <- as.character(feature_network$annotation)
+  feature_network$evidence_level <- as.character(feature_network$evidence_level)
+  feature_network$evidence <- as.character(feature_network$evidence)
+  feature_network$from_ms2_spectrum_id <- as.character(feature_network$from_ms2_spectrum_id)
+  feature_network$to_ms2_spectrum_id <- as.character(feature_network$to_ms2_spectrum_id)
+  feature_network$from_ms2_quality <- as.character(feature_network$from_ms2_quality)
+  feature_network$to_ms2_quality <- as.character(feature_network$to_ms2_quality)
   feature_network
 }
 
@@ -858,6 +1126,169 @@ pairwise_feature_correlations <- function(cor_cache, feature_id, candidate_ids) 
   }, numeric(1))
 }
 
+add_ms2_isf_evidence <- function(edges,
+                                 variable_info,
+                                 ms2_index,
+                                 fragment_mz_tol) {
+  if (nrow(edges) == 0 || nrow(ms2_index$meta) == 0) {
+    return(edges)
+  }
+
+  variable_info <- variable_info[match(unique(c(edges$from, edges$to)),
+                                      variable_info$variable_id), , drop = FALSE]
+  feature_mz <- stats::setNames(variable_info$mz, variable_info$variable_id)
+  meta <- ms2_index$meta
+  spectra <- ms2_index$spectra
+
+  for (i in seq_len(nrow(edges))) {
+    parent_id <- edges$from[i]
+    fragment_id <- edges$to[i]
+    parent_meta <- if (parent_id %in% rownames(meta)) meta[parent_id, , drop = FALSE] else meta[0, , drop = FALSE]
+    fragment_meta <- if (fragment_id %in% rownames(meta)) meta[fragment_id, , drop = FALSE] else meta[0, , drop = FALSE]
+
+    edges$evidence_level[i] <- "Rule"
+    edges$evidence[i] <- "neutral_loss_or_mass_difference"
+
+    if (nrow(parent_meta) > 0) {
+      edges$from_ms2_spectrum_id[i] <- parent_meta$ms2_spectrum_id
+      edges$from_ms2_quality[i] <- parent_meta$ms2_assignment_quality
+      edges$from_ms2_shared_n[i] <- parent_meta$ms2_assignment_count
+    }
+    if (nrow(fragment_meta) > 0) {
+      edges$to_ms2_spectrum_id[i] <- fragment_meta$ms2_spectrum_id
+      edges$to_ms2_quality[i] <- fragment_meta$ms2_assignment_quality
+      edges$to_ms2_shared_n[i] <- fragment_meta$ms2_assignment_count
+    }
+
+    parent_spectrum <- spectra[[parent_id]]
+    fragment_spectrum <- spectra[[fragment_id]]
+    has_parent_ms2 <- !is.null(parent_spectrum) && nrow(as_ms2_peak_matrix(parent_spectrum)) > 0
+    has_fragment_ms2 <- !is.null(fragment_spectrum) && nrow(as_ms2_peak_matrix(fragment_spectrum)) > 0
+
+    if (!has_parent_ms2) {
+      next
+    }
+
+    if (nrow(parent_meta) > 0 && nrow(fragment_meta) > 0) {
+      same_spectrum <- identical(
+        paste(parent_meta$ms2_set, parent_meta$ms2_file, parent_meta$ms2_spectrum_id, sep = "||"),
+        paste(fragment_meta$ms2_set, fragment_meta$ms2_file, fragment_meta$ms2_spectrum_id, sep = "||")
+      )
+      edges$same_ms2_spectrum[i] <- same_spectrum
+    } else {
+      same_spectrum <- FALSE
+    }
+
+    fragment_mz <- feature_mz[fragment_id]
+    fragment_match <- is.finite(fragment_mz) &&
+      ms2_contains_mz(parent_spectrum, fragment_mz, fragment_mz_tol)
+    edges$ms2_fragment_match[i] <- fragment_match
+    if (!fragment_match) {
+      next
+    }
+
+    parent_quality <- parent_meta$ms2_assignment_quality
+    parent_reliable <- parent_quality %in% c("unique", "shared_best_owner")
+    if (parent_reliable) {
+      edges$evidence_level[i] <- "L2"
+      edges$evidence[i] <- paste(edges$evidence[i], "fragment_mz_in_parent_ms2", sep = ";")
+      edges$confidence[i] <- pmin(1, edges$confidence[i] + 0.05)
+    } else {
+      edges$evidence_level[i] <- "L2_ambiguous"
+      edges$evidence[i] <- paste(edges$evidence[i], "fragment_mz_in_shared_parent_ms2", sep = ";")
+      next
+    }
+
+    if (!has_fragment_ms2 || isTRUE(same_spectrum)) {
+      if (isTRUE(same_spectrum)) {
+        edges$evidence[i] <- paste(edges$evidence[i], "same_ms2_spectrum_no_l1", sep = ";")
+      }
+      next
+    }
+
+    fragment_quality <- fragment_meta$ms2_assignment_quality
+    fragment_reliable <- fragment_quality %in% c("unique", "shared_best_owner")
+    if (!fragment_reliable) {
+      edges$evidence[i] <- paste(edges$evidence[i], "fragment_ms2_shared_non_owner_no_l1", sep = ";")
+      next
+    }
+
+    sim <- reverse_ms2_similarity(parent_spectrum, fragment_spectrum, mz_tol = fragment_mz_tol)
+    edges$ms2_similarity_score[i] <- sim$score
+    edges$ms2_matched_peaks[i] <- sim$matched_peaks
+    edges$ms2_matched_ratio[i] <- sim$matched_ratio
+    if (is.finite(sim$score) && (sim$score > 0.5 || sim$matched_ratio > 0.7)) {
+      edges$evidence_level[i] <- "L1"
+      edges$evidence[i] <- paste(edges$evidence[i], "ms2_spectral_similarity", sep = ";")
+      edges$confidence[i] <- pmin(1, edges$confidence[i] + 0.10)
+    }
+  }
+
+  edges
+}
+
+as_ms2_peak_matrix <- function(spectrum) {
+  if (is.null(spectrum)) {
+    return(matrix(numeric(), ncol = 2))
+  }
+  spectrum <- as.matrix(spectrum)
+  if (ncol(spectrum) < 2 || nrow(spectrum) == 0) {
+    return(matrix(numeric(), ncol = 2))
+  }
+  spectrum <- spectrum[, 1:2, drop = FALSE]
+  suppressWarnings(storage.mode(spectrum) <- "numeric")
+  spectrum <- spectrum[is.finite(spectrum[, 1]) & is.finite(spectrum[, 2]) & spectrum[, 2] > 0, ,
+                       drop = FALSE]
+  colnames(spectrum) <- c("mz", "intensity")
+  spectrum
+}
+
+ms2_contains_mz <- function(spectrum, mz, mz_tol) {
+  spectrum <- as_ms2_peak_matrix(spectrum)
+  if (nrow(spectrum) == 0 || !is.finite(mz)) {
+    return(FALSE)
+  }
+  any(abs(spectrum[, 1] - mz) <= mz_tol)
+}
+
+reverse_ms2_similarity <- function(parent_spectrum, fragment_spectrum, mz_tol) {
+  x <- as_ms2_peak_matrix(parent_spectrum)
+  y <- as_ms2_peak_matrix(fragment_spectrum)
+  empty <- list(score = NA_real_, matched_peaks = 0L, matched_ratio = NA_real_)
+  if (nrow(x) == 0 || nrow(y) == 0) {
+    return(empty)
+  }
+
+  x[, 2] <- 100 * x[, 2] / max(x[, 2])
+  y[, 2] <- 100 * y[, 2] / max(y[, 2])
+  y_available <- rep(TRUE, nrow(y))
+  matched_parent <- numeric()
+  matched_fragment <- numeric()
+
+  for (i in seq_len(nrow(x))) {
+    candidate_idx <- which(y_available & abs(y[, 1] - x[i, 1]) <= mz_tol)
+    if (length(candidate_idx) == 0) {
+      next
+    }
+    best_idx <- candidate_idx[which.min(abs(y[candidate_idx, 1] - x[i, 1]))]
+    matched_parent <- c(matched_parent, x[i, 2])
+    matched_fragment <- c(matched_fragment, y[best_idx, 2])
+    y_available[best_idx] <- FALSE
+  }
+
+  if (length(matched_parent) == 0) {
+    return(list(score = 0, matched_peaks = 0L, matched_ratio = 0))
+  }
+
+  score <- sum(matched_parent * matched_fragment) /
+    sqrt(sum(matched_parent^2) * sum(y[, 2]^2))
+  list(
+    score = as.numeric(score),
+    matched_peaks = length(matched_parent),
+    matched_ratio = length(matched_parent) / nrow(y)
+  )
+}
+
 edge_confidence <- function(mz_error_ppm, ppm, rt_diff, rt_tolerance, abundance_cor) {
   mass_score <- pmax(0, 1 - mz_error_ppm / ppm)
   rt_score <- pmax(0, 1 - rt_diff / rt_tolerance)
@@ -895,6 +1326,297 @@ add_qc_ratio_stability <- function(network, object, expression_data) {
   qc_score <- ifelse(is.na(network$qc_ratio_rsd), 0, pmax(0, 1 - network$qc_ratio_rsd))
   network$confidence <- round((0.85 * network$confidence) + (0.15 * qc_score), 4)
   network
+}
+
+prefix_feature_network_ids <- function(network, prefix) {
+  network <- normalize_feature_network(network)
+  if (nrow(network) == 0) {
+    return(network)
+  }
+  network$from <- paste(prefix, network$from, sep = "::")
+  network$to <- paste(prefix, network$to, sep = "::")
+  network
+}
+
+detect_cross_polarity_edges <- function(positive_object,
+                                        negative_object,
+                                        ppm,
+                                        rt_tolerance,
+                                        cor_cutoff,
+                                        neutral_loss_table = NULL) {
+  pos <- prepare_feature_network_data(positive_object)
+  neg <- prepare_feature_network_data(negative_object)
+  pos_adducts <- default_cross_polarity_adduct_table("positive")
+  neg_adducts <- default_cross_polarity_adduct_table("negative")
+  same_compound <- detect_cross_neutral_mass_edges(
+    pos = pos,
+    neg = neg,
+    pos_adducts = pos_adducts,
+    neg_adducts = neg_adducts,
+    ppm = ppm,
+    rt_tolerance = rt_tolerance,
+    cor_cutoff = cor_cutoff
+  )
+
+  if (is.null(neutral_loss_table)) {
+    neutral_loss_table <- default_neutral_loss_table()
+  }
+  cross_isf <- detect_cross_polarity_isf_edges(
+    pos = pos,
+    neg = neg,
+    pos_adducts = pos_adducts,
+    neg_adducts = neg_adducts,
+    neutral_loss_table = neutral_loss_table,
+    ppm = ppm,
+    rt_tolerance = rt_tolerance,
+    cor_cutoff = cor_cutoff
+  )
+
+  normalize_feature_network(rbind(same_compound, cross_isf))
+}
+
+default_cross_polarity_adduct_table <- function(mode) {
+  table <- default_adduct_table(mode)
+  table[!grepl("-H2O", table$annotation, fixed = TRUE), , drop = FALSE]
+}
+
+detect_cross_neutral_mass_edges <- function(pos,
+                                            neg,
+                                            pos_adducts,
+                                            neg_adducts,
+                                            ppm,
+                                            rt_tolerance,
+                                            cor_cutoff) {
+  edges <- list()
+  edge_idx <- 1L
+  cor_data <- prepare_cross_polarity_correlation(pos$expression_data, neg$expression_data)
+
+  for (p_adduct in seq_len(nrow(pos_adducts))) {
+    pos_neutral <- pos$variable_info$mz - pos_adducts$mass_offset[p_adduct]
+    for (n_adduct in seq_len(nrow(neg_adducts))) {
+      neg_neutral <- neg$variable_info$mz - neg_adducts$mass_offset[n_adduct]
+      matches <- match_cross_neutral_features(
+        pos_neutral = pos_neutral,
+        neg_neutral = neg_neutral,
+        pos_rt = pos$variable_info$rt,
+        neg_rt = neg$variable_info$rt,
+        ppm = ppm,
+        rt_tolerance = rt_tolerance
+      )
+      if (nrow(matches) == 0) {
+        next
+      }
+      matches <- add_cross_correlation(matches, pos, neg, cor_data)
+      if (!is.null(cor_cutoff)) {
+        matches <- matches[is.finite(matches$abundance_cor) & matches$abundance_cor >= cor_cutoff, ,
+                           drop = FALSE]
+      }
+      if (nrow(matches) == 0) {
+        next
+      }
+
+      edges[[edge_idx]] <- data.frame(
+        from = paste("pos", pos$variable_info$variable_id[matches$pos_idx], sep = "::"),
+        to = paste("neg", neg$variable_info$variable_id[matches$neg_idx], sep = "::"),
+        type = "Cross-polarity",
+        annotation = paste0(pos_adducts$annotation[p_adduct], " <-> ", neg_adducts$annotation[n_adduct]),
+        confidence = edge_confidence(matches$mz_error_ppm, ppm, matches$rt_diff, rt_tolerance,
+                                     matches$abundance_cor),
+        mz_error_ppm = matches$mz_error_ppm,
+        rt_diff = matches$rt_diff,
+        abundance_cor = matches$abundance_cor,
+        qc_ratio_rsd = NA_real_,
+        evidence_level = "Cross",
+        evidence = "same_neutral_mass_across_polarity",
+        stringsAsFactors = FALSE
+      )
+      edge_idx <- edge_idx + 1L
+    }
+  }
+
+  normalize_feature_network(do.call(rbind, edges))
+}
+
+detect_cross_polarity_isf_edges <- function(pos,
+                                            neg,
+                                            pos_adducts,
+                                            neg_adducts,
+                                            neutral_loss_table,
+                                            ppm,
+                                            rt_tolerance,
+                                            cor_cutoff) {
+  if (!all(c("annotation", "mass") %in% colnames(neutral_loss_table))) {
+    stop("neutral_loss_table must contain columns: annotation, mass", call. = FALSE)
+  }
+
+  edges <- list()
+  edge_idx <- 1L
+  cor_data <- prepare_cross_polarity_correlation(pos$expression_data, neg$expression_data)
+
+  for (p_adduct in seq_len(nrow(pos_adducts))) {
+    pos_neutral <- pos$variable_info$mz - pos_adducts$mass_offset[p_adduct]
+    for (n_adduct in seq_len(nrow(neg_adducts))) {
+      neg_neutral <- neg$variable_info$mz - neg_adducts$mass_offset[n_adduct]
+      for (loss_idx in seq_len(nrow(neutral_loss_table))) {
+        loss_mass <- neutral_loss_table$mass[loss_idx]
+        if (!is.finite(loss_mass) || loss_mass <= 0) {
+          next
+        }
+
+        pos_parent_matches <- match_cross_neutral_features(
+          pos_neutral = pos_neutral - loss_mass,
+          neg_neutral = neg_neutral,
+          pos_rt = pos$variable_info$rt,
+          neg_rt = neg$variable_info$rt,
+          ppm = ppm,
+          rt_tolerance = rt_tolerance
+        )
+        if (nrow(pos_parent_matches) > 0) {
+          pos_parent_matches <- add_cross_correlation(pos_parent_matches, pos, neg, cor_data)
+          if (!is.null(cor_cutoff)) {
+            pos_parent_matches <- pos_parent_matches[
+              is.finite(pos_parent_matches$abundance_cor) &
+                pos_parent_matches$abundance_cor >= cor_cutoff, , drop = FALSE]
+          }
+          if (nrow(pos_parent_matches) > 0) {
+            edges[[edge_idx]] <- make_cross_isf_edge(
+              matches = pos_parent_matches,
+              parent_ids = paste("pos", pos$variable_info$variable_id[pos_parent_matches$pos_idx], sep = "::"),
+              fragment_ids = paste("neg", neg$variable_info$variable_id[pos_parent_matches$neg_idx], sep = "::"),
+              annotation = paste0("pos ", pos_adducts$annotation[p_adduct], " -> neg ",
+                                  neg_adducts$annotation[n_adduct], " -", neutral_loss_table$annotation[loss_idx]),
+              ppm = ppm,
+              rt_tolerance = rt_tolerance
+            )
+            edge_idx <- edge_idx + 1L
+          }
+        }
+
+        neg_parent_matches <- match_cross_neutral_features(
+          pos_neutral = pos_neutral,
+          neg_neutral = neg_neutral - loss_mass,
+          pos_rt = pos$variable_info$rt,
+          neg_rt = neg$variable_info$rt,
+          ppm = ppm,
+          rt_tolerance = rt_tolerance
+        )
+        if (nrow(neg_parent_matches) > 0) {
+          neg_parent_matches <- add_cross_correlation(neg_parent_matches, pos, neg, cor_data)
+          if (!is.null(cor_cutoff)) {
+            neg_parent_matches <- neg_parent_matches[
+              is.finite(neg_parent_matches$abundance_cor) &
+                neg_parent_matches$abundance_cor >= cor_cutoff, , drop = FALSE]
+          }
+          if (nrow(neg_parent_matches) > 0) {
+            edges[[edge_idx]] <- make_cross_isf_edge(
+              matches = neg_parent_matches,
+              parent_ids = paste("neg", neg$variable_info$variable_id[neg_parent_matches$neg_idx], sep = "::"),
+              fragment_ids = paste("pos", pos$variable_info$variable_id[neg_parent_matches$pos_idx], sep = "::"),
+              annotation = paste0("neg ", neg_adducts$annotation[n_adduct], " -> pos ",
+                                  pos_adducts$annotation[p_adduct], " -", neutral_loss_table$annotation[loss_idx]),
+              ppm = ppm,
+              rt_tolerance = rt_tolerance
+            )
+            edge_idx <- edge_idx + 1L
+          }
+        }
+      }
+    }
+  }
+
+  normalize_feature_network(do.call(rbind, edges))
+}
+
+make_cross_isf_edge <- function(matches, parent_ids, fragment_ids, annotation, ppm, rt_tolerance) {
+  data.frame(
+    from = parent_ids,
+    to = fragment_ids,
+    type = "Cross-polarity ISF",
+    annotation = annotation,
+    confidence = edge_confidence(matches$mz_error_ppm, ppm, matches$rt_diff, rt_tolerance,
+                                 matches$abundance_cor),
+    mz_error_ppm = matches$mz_error_ppm,
+    rt_diff = matches$rt_diff,
+    abundance_cor = matches$abundance_cor,
+    qc_ratio_rsd = NA_real_,
+    evidence_level = "Cross_ISF",
+    evidence = "neutral_loss_across_polarity",
+    stringsAsFactors = FALSE
+  )
+}
+
+match_cross_neutral_features <- function(pos_neutral, neg_neutral, pos_rt, neg_rt, ppm, rt_tolerance) {
+  matches <- list()
+  idx <- 1L
+  neg_order <- order(neg_rt)
+  neg_rt_sorted <- neg_rt[neg_order]
+
+  for (i in seq_along(pos_neutral)) {
+    if (!is.finite(pos_neutral[i])) {
+      next
+    }
+    left <- findInterval(pos_rt[i] - rt_tolerance, neg_rt_sorted, left.open = TRUE) + 1L
+    right <- findInterval(pos_rt[i] + rt_tolerance, neg_rt_sorted)
+    if (left > right) {
+      next
+    }
+    candidates <- neg_order[seq.int(left, right)]
+    mass_window <- pos_neutral[i] * ppm / 1e6
+    delta <- abs(neg_neutral[candidates] - pos_neutral[i])
+    hit <- candidates[is.finite(delta) & delta <= mass_window]
+    if (length(hit) == 0) {
+      next
+    }
+    matches[[idx]] <- data.frame(
+      pos_idx = rep(i, length(hit)),
+      neg_idx = hit,
+      mz_error_ppm = abs(neg_neutral[hit] - pos_neutral[i]) / pos_neutral[i] * 1e6,
+      rt_diff = abs(neg_rt[hit] - pos_rt[i]),
+      abundance_cor = NA_real_,
+      stringsAsFactors = FALSE
+    )
+    idx <- idx + 1L
+  }
+
+  if (length(matches) == 0) {
+    return(data.frame(pos_idx = integer(), neg_idx = integer(), mz_error_ppm = numeric(),
+                      rt_diff = numeric(), abundance_cor = numeric()))
+  }
+  do.call(rbind, matches)
+}
+
+prepare_cross_polarity_correlation <- function(pos_expr, neg_expr) {
+  shared_samples <- intersect(colnames(pos_expr), colnames(neg_expr))
+  if (length(shared_samples) < 3) {
+    return(list(shared_samples = shared_samples, enabled = FALSE))
+  }
+  list(
+    shared_samples = shared_samples,
+    enabled = TRUE,
+    pos_expr = pos_expr[, shared_samples, drop = FALSE],
+    neg_expr = neg_expr[, shared_samples, drop = FALSE]
+  )
+}
+
+add_cross_correlation <- function(matches, pos, neg, cor_data) {
+  if (nrow(matches) == 0) {
+    return(matches)
+  }
+  if (!isTRUE(cor_data$enabled)) {
+    matches$abundance_cor <- NA_real_
+    return(matches)
+  }
+  pos_ids <- pos$variable_info$variable_id[matches$pos_idx]
+  neg_ids <- neg$variable_info$variable_id[matches$neg_idx]
+  matches$abundance_cor <- vapply(seq_len(nrow(matches)), function(i) {
+    suppressWarnings(stats::cor(
+      cor_data$pos_expr[pos_ids[i], ],
+      cor_data$neg_expr[neg_ids[i], ],
+      use = "pairwise.complete.obs",
+      method = "pearson"
+    ))
+  }, numeric(1))
+  matches
 }
 
 pc1_pseudo_area <- function(sub_expr, base_feature, scale_features) {
