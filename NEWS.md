@@ -1,5 +1,20 @@
 # MetMiner v2 — Changelog
 
+## v0.1.0.9002 (development)
+
+### 2026-05-02 — Per-peak intensity noise filter
+
+- **New function `find_noise_intensity()`** — marks individual peak intensities as `NA` when they fall below a noise threshold estimated from the data, rather than a hard cutoff.
+  - **Blank-based method**: estimates per-feature noise floor as `blank_mean + k × blank_SD` from blank samples. The gold standard when blanks are available.
+  - **Distribution-based method**: finds the log-intensity antimode between noise and signal peaks within each sample, with percentile fallback when no clear bimodal structure exists.
+  - Auto-falls back from blank to distribution when fewer than 2 blank samples are present.
+- **Integrated into noise-removal pipeline** (`mod_data_rm_noise.R`) as Step 0, upstream of blank ratio, MV, and RSD filters. UI controls added with method-dependent parameter panels.
+- **Documentation** — `inst/app/intensity_filter_principles.md` covering algorithm details, parameter guidance, and comparison with existing filters.
+
+*Co-authored with Claude Code*
+
+---
+
 ## v0.1.0.9001 (development)
 
 ### 2026-04-29 — Codex-assisted: MS2-audited ISF network workflow
