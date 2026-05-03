@@ -24,7 +24,7 @@ find_noise_multiple(
 
 \item{do_rsd}{Whether to apply RSD-based filtering after MV filtering.}
 
-\item{rsd_cutoff}{RSD threshold (%) for QC samples (only used if do_rsd = TRUE).}
+\item{rsd_cutoff}{RSD threshold percent for QC samples (only used if do_rsd = TRUE).}
 }
 \value{
 A cleaned mass_dataset object, or NULL if no features survive filtering.

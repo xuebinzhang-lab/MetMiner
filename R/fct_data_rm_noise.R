@@ -9,7 +9,7 @@
 #' @param qc_na_freq Missing value ratio threshold for QC samples.
 #' @param S_na_freq Missing value ratio threshold for sample groups.
 #' @param do_rsd Whether to apply RSD-based filtering after MV filtering.
-#' @param rsd_cutoff RSD threshold (%) for QC samples (only used if do_rsd = TRUE).
+#' @param rsd_cutoff RSD threshold percent for QC samples (only used if do_rsd = TRUE).
 #' @return A cleaned mass_dataset object, or NULL if no features survive filtering.
 #' @importFrom massdataset extract_sample_info extract_expression_data
 #'   extract_variable_info activate_mass_dataset mutate_rsd
@@ -149,30 +149,32 @@ find_noise_blank <- function(object, blank_label = "Blank", sample_label = "Subj
   return(object)
 }
 
-#' Filter Low-Intensity Peaks
+#' Mask Low-Confidence Intensities
 #'
-#' Marks individual peak intensities as NA when they fall below a noise
-#' threshold estimated from the data. After intensity filtering, downstream
-#' MV-based filtering naturally removes features that accumulate too many NAs.
+#' Marks individual feature-by-sample intensities as NA when they do not exceed
+#' a defensible background threshold. This is a post-peak-picking masking step:
+#' it complements, but does not replace, XCMS noise, prefilter, or S/N
+#' thresholds. After masking, downstream MV-based filtering can remove features
+#' that accumulate too many NAs.
 #'
 #' Two methods are available:
-#' - "blank": Estimates per-feature noise baseline from blank samples
-#'   (blank_mean + blank_sd_multiplier * blank_SD). The gold standard when
-#'   blank samples exist.
-#' - "distribution": Per-sample, finds the antimode between noise and signal
-#'   peaks in the log-intensity distribution. Falls back to a percentile cutoff
-#'   when no clear bimodal structure is found.
+#' - "blank": Estimates a per-feature background threshold from blank samples
+#'   (blank_mean + blank_sd_multiplier * blank_SD). This is the recommended
+#'   method when at least two blank samples exist.
+#' - "distribution": Advanced fallback for datasets without blanks. It
+#'   estimates a sample-level cutoff from the log-intensity distribution and can
+#'   mask genuine low-abundance metabolites, so results should be inspected.
 #'
 #' @param object A mass_dataset class object.
 #' @param blank_label Character. Class value for blank samples (default "Blank").
 #' @param method Character. "blank" or "distribution". If "blank" and fewer
-#'   than 2 blank samples exist, automatically falls back to "distribution".
+#'   than 2 blank samples exist, the object is returned unchanged with a warning.
 #' @param blank_sd_multiplier Numeric. Multiplier for blank SD when computing
-#'   the per-feature noise cutoff (default 3).
+#'   the per-feature blank background threshold (default 3).
 #' @param percentile_fallback Numeric. Fallback percentile (0–1) when the
 #'   distribution method cannot find a clear noise/signal antimode
 #'   (default 0.01).
-#' @return A mass_dataset object with low-intensity peaks set to NA.
+#' @return A mass_dataset object with low-confidence intensities set to NA.
 #' @importFrom massdataset extract_sample_info extract_expression_data
 #' @importFrom stats sd density quantile
 #' @export
@@ -193,8 +195,8 @@ find_noise_intensity <- function(object,
   blank_idx <- which(sample_info$class == blank_label)
 
   if (method == "blank" && length(blank_idx) < 2) {
-    warning("Fewer than 2 blank samples; falling back to distribution method.")
-    method <- "distribution"
+    warning("Fewer than 2 blank samples; skipping blank-informed intensity masking.")
+    return(object)
   }
 
   na_before <- sum(is.na(expr_mat))
@@ -229,11 +231,11 @@ find_noise_intensity <- function(object,
   na_after <- sum(is.na(expr_mat))
   n_new <- na_after - na_before
   if (n_new > 0) {
-    message("Intensity filter: marked ", n_new,
-            " low-intensity peaks as NA (",
+    message("Intensity masking: marked ", n_new,
+            " low-confidence values as NA (",
             sprintf("%.1f", 100 * n_new / length(expr_mat)), "% of matrix)")
   } else {
-    message("Intensity filter: no peaks fell below noise threshold.")
+    message("Intensity masking: no values fell below the selected threshold.")
   }
 
   object@expression_data <- as.data.frame(expr_mat)

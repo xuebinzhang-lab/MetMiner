@@ -675,6 +675,7 @@ prepare_feature_network_data <- function(object) {
 #' @param rt_tol_sec Strict precursor RT tolerance in seconds.
 #'
 #' @return A data frame with one row per feature-MS2 assignment.
+#' @importFrom stats ave
 #' @export
 audit_ms2_assignment <- function(object, mz_tol_ppm = 5, rt_tol_sec = 10) {
   check_mass_dataset_object(object)

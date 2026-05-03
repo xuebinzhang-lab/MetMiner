@@ -104,10 +104,7 @@ app_ui <- function(request) {
           span("GitHub", style = "font-size: 0.95rem;")
         )
       )
-    ),
-    # --- Global Widgets ---
-    # Add the console monitor UI here, it will float on top of everything
-    mod_console_monitor_ui("console_1")
+    )
   )
 }
 

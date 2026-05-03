@@ -85,85 +85,123 @@ mod_feature_network_ui <- function(id) {
         div(
           class = "p-3",
 
-          tags$h5(class = "text-primary fw-bold mb-3", bsicons::bs_icon("info-circle"), " Method Summary"),
-          div(
-            class = "card bg-light border-start border-primary border-3 mb-4",
-            div(class = "card-body py-2", verbatimTextOutput(ns("method_summary"), placeholder = TRUE))
-          ),
+          bslib::navset_tab(
+            bslib::nav_panel(
+              "Analysis",
+              tags$h5(class = "text-primary fw-bold mb-3", bsicons::bs_icon("info-circle"), " Method Summary"),
+              div(
+                class = "card bg-light border-start border-primary border-3 mb-4",
+                div(class = "card-body py-2", verbatimTextOutput(ns("method_summary"), placeholder = TRUE))
+              ),
 
-          tags$h5(class = "text-primary fw-bold mb-3", bsicons::bs_icon("activity"), " Network Status"),
-          bslib::layout_columns(
-            col_widths = c(4, 4, 4),
-            bslib::card(
-              bslib::card_header("Positive Mode Status", class = "bg-info-subtle text-info-emphasis"),
-              verbatimTextOutput(ns("status_pos"), placeholder = TRUE),
-              style = "min-height: 170px;"
-            ),
-            bslib::card(
-              bslib::card_header("Negative Mode Status", class = "bg-warning-subtle text-warning-emphasis"),
-              verbatimTextOutput(ns("status_neg"), placeholder = TRUE),
-              style = "min-height: 170px;"
-            ),
-            bslib::card(
-              bslib::card_header("Final Merged Status", class = "bg-success-subtle text-success-emphasis"),
-              verbatimTextOutput(ns("status_merged"), placeholder = TRUE),
-              style = "min-height: 170px;"
-            )
-          ),
+              tags$h5(class = "text-primary fw-bold mb-3", bsicons::bs_icon("activity"), " Network Status"),
+              bslib::layout_columns(
+                col_widths = c(4, 4, 4),
+                bslib::card(
+                  bslib::card_header("Positive Mode Status", class = "bg-info-subtle text-info-emphasis"),
+                  verbatimTextOutput(ns("status_pos"), placeholder = TRUE),
+                  style = "min-height: 170px;"
+                ),
+                bslib::card(
+                  bslib::card_header("Negative Mode Status", class = "bg-warning-subtle text-warning-emphasis"),
+                  verbatimTextOutput(ns("status_neg"), placeholder = TRUE),
+                  style = "min-height: 170px;"
+                ),
+                bslib::card(
+                  bslib::card_header("Final Merged Status", class = "bg-success-subtle text-success-emphasis"),
+                  verbatimTextOutput(ns("status_merged"), placeholder = TRUE),
+                  style = "min-height: 170px;"
+                )
+              ),
 
-          br(),
+              br(),
 
-          tags$h5(class = "text-primary fw-bold mb-3", bsicons::bs_icon("diagram-3"), " Feature Relationship Network"),
-          div(
-            class = "d-flex align-items-center gap-3 mb-3 p-3 bg-white rounded shadow-sm border flex-wrap",
-            div(
-              style = "min-width: 260px;",
-              selectInput(
-                ns("network_scope"),
-                "Network View",
-                choices = c("Single ion mode" = "single", "Final merged polarity network" = "merged"),
-                selected = "single"
+              tags$h5(class = "text-primary fw-bold mb-3", bsicons::bs_icon("table"), " Empirical Compound Quantification"),
+              bslib::card(
+                bslib::card_header("Network Tables", class = "bg-light"),
+                bslib::navset_card_tab(
+                  bslib::nav_panel("Edges", DT::dataTableOutput(ns("tbl_edges"))),
+                  bslib::nav_panel("Pseudo Area", DT::dataTableOutput(ns("tbl_pseudo_area"))),
+                  bslib::nav_panel("Compound Info", DT::dataTableOutput(ns("tbl_compound_info"))),
+                  bslib::nav_panel("Feature Mapping", DT::dataTableOutput(ns("tbl_feature_mapping")))
+                )
               )
             ),
-            div(
-              style = "min-width: 220px;",
-              selectInput(ns("view_mode"), "Ion Mode", choices = c("Positive" = "positive", "Negative" = "negative"), selected = "positive")
-            )
-          ),
-          bslib::card(
-            height = "720px",
-            full_screen = TRUE,
-            bslib::card_header(textOutput(ns("network_title"), inline = TRUE), class = "bg-light"),
-            bslib::layout_sidebar(
-              sidebar = bslib::sidebar(
-                title = "Network Controls",
-                open = FALSE,
-                bg = "#f8f9fa",
-                selectInput(ns("sub_network"), "Sub-network", choices = c("All networks" = "all")),
-                checkboxInput(ns("interactive_plot"), "Interactive network", value = TRUE),
-                sliderInput(ns("min_confidence"), "Min Edge Confidence", min = 0, max = 1, value = 0, step = 0.05),
-                numericInput(ns("max_render_edges"), "Max Rendered Edges", value = 500, min = 50, step = 50),
-                numericInput(ns("max_subnetworks"), "Max Sub-network Choices", value = 50, min = 5, step = 5),
-                tags$hr(),
-                tags$h6(class = "fw-bold text-success", "Cross-polarity Merge"),
-                numericInput(ns("cross_ppm"), "m/z Tolerance (ppm)", value = 10, min = 1, step = 1),
-                numericInput(ns("cross_rt_tolerance"), "RT Window (sec)", value = 5, min = 0.1, step = 0.5),
-                sliderInput(ns("cross_cor_cutoff"), "Correlation", min = 0, max = 1, value = 0.7, step = 0.05)
+
+            bslib::nav_panel(
+              "Visualization",
+              tags$h5(class = "text-primary fw-bold mb-3", bsicons::bs_icon("diagram-3"), " Feature Relationship Network"),
+              div(
+                class = "d-flex align-items-center gap-3 mb-3 p-3 bg-white rounded shadow-sm border flex-wrap",
+                div(
+                  style = "min-width: 260px;",
+                  selectInput(
+                    ns("network_scope"),
+                    "Network View",
+                    choices = c("Single ion mode" = "single", "Final merged polarity network" = "merged"),
+                    selected = "single"
+                  )
+                ),
+                div(
+                  style = "min-width: 220px;",
+                  selectInput(ns("view_mode"), "Ion Mode", choices = c("Positive" = "positive", "Negative" = "negative"), selected = "positive")
+                ),
+                div(
+                  class = "align-self-end mb-3",
+                  actionButton(ns("render_network"), "Show Network", icon = icon("eye"), class = "btn-primary")
+                )
               ),
-              uiOutput(ns("network_ui"))
-            )
-          ),
-
-          br(),
-
-          tags$h5(class = "text-primary fw-bold mb-3", bsicons::bs_icon("table"), " Empirical Compound Quantification"),
-          bslib::card(
-            bslib::card_header("Network Tables", class = "bg-light"),
-            bslib::navset_card_tab(
-              bslib::nav_panel("Edges", DT::dataTableOutput(ns("tbl_edges"))),
-              bslib::nav_panel("Pseudo Area", DT::dataTableOutput(ns("tbl_pseudo_area"))),
-              bslib::nav_panel("Compound Info", DT::dataTableOutput(ns("tbl_compound_info"))),
-              bslib::nav_panel("Feature Mapping", DT::dataTableOutput(ns("tbl_feature_mapping")))
+              bslib::layout_columns(
+                col_widths = c(7, 5),
+                bslib::card(
+                  height = "860px",
+                  full_screen = TRUE,
+                  bslib::card_header(textOutput(ns("network_title"), inline = TRUE), class = "bg-light"),
+                  bslib::layout_sidebar(
+                    sidebar = bslib::sidebar(
+                      title = "Network Controls",
+                      open = FALSE,
+                      bg = "#f8f9fa",
+                      selectInput(ns("sub_network"), "Sub-network", choices = c("All networks" = "all")),
+                      checkboxInput(ns("interactive_plot"), "Interactive network", value = TRUE),
+                      sliderInput(ns("min_confidence"), "Min Edge Confidence", min = 0, max = 1, value = 0, step = 0.05),
+                      numericInput(ns("max_render_edges"), "Max Rendered Edges", value = 500, min = 50, step = 50),
+                      numericInput(ns("max_subnetworks"), "Max Sub-network Choices", value = 50, min = 5, step = 5),
+                      tags$hr(),
+                      tags$h6(class = "fw-bold text-success", "Cross-polarity Merge"),
+                      numericInput(ns("cross_ppm"), "m/z Tolerance (ppm)", value = 10, min = 1, step = 1),
+                      numericInput(ns("cross_rt_tolerance"), "RT Window (sec)", value = 5, min = 0.1, step = 0.5),
+                      sliderInput(ns("cross_cor_cutoff"), "Correlation", min = 0, max = 1, value = 0.7, step = 0.05),
+                      tags$hr(),
+                      numericInput(ns("ms2_top_n_annotate"), "MS2 Annotate Top N Peaks", value = 12, min = 3, step = 1)
+                    ),
+                    uiOutput(ns("network_ui"))
+                  )
+                ),
+                div(
+                  bslib::card(
+                    height = "300px",
+                    full_screen = TRUE,
+                    bslib::card_header("Sub-network MS1 Spectrum", class = "bg-light"),
+                    tags$div(class = "px-2 pb-2 text-muted small", textOutput(ns("selected_node_text"))),
+                    plotly::plotlyOutput(ns("ms1_window_plot"), height = "235px")
+                  ),
+                  bslib::card(
+                    height = "300px",
+                    full_screen = TRUE,
+                    bslib::card_header("Assigned MS2 Spectrum", class = "bg-light"),
+                    tags$div(class = "px-2 pb-2 text-muted small", textOutput(ns("selected_ms2_text"))),
+                    plotly::plotlyOutput(ns("ms2_spectrum_plot"), height = "235px")
+                  ),
+                  bslib::card(
+                    height = "300px",
+                    full_screen = TRUE,
+                    bslib::card_header("Raw XCMS Chromatogram", class = "bg-light"),
+                    tags$div(class = "px-2 pb-2 text-muted small", textOutput(ns("selected_eic_text"))),
+                    plotly::plotlyOutput(ns("feature_eic_plot"), height = "235px")
+                  )
+                )
+              )
             )
           )
         )
@@ -311,7 +349,7 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
       attach_ms2_to_normalized_objects(ms2_root)
     }
 
-    get_merged_network <- function() {
+    build_merged_network <- function() {
       if (!is.null(global_data$object_pos_network) && !is.null(global_data$object_neg_network)) {
         merged <- merge_polarity_feature_networks(
           positive_object = global_data$object_pos_network,
@@ -323,6 +361,10 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
         global_data$merged_feature_network <- merged
         return(merged)
       }
+      empty_feature_network()
+    }
+
+    get_merged_network <- function() {
       if (!is.null(global_data$merged_feature_network)) {
         return(global_data$merged_feature_network)
       }
@@ -413,6 +455,13 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
         updateSelectInput(session, "view_mode", choices = choices, selected = choices[[1]])
       }
     })
+
+    observeEvent(list(input$network_scope, input$view_mode, input$sub_network,
+                      input$interactive_plot, input$min_confidence,
+                      input$max_render_edges), {
+      rendered_network(NULL)
+      render_state("idle")
+    }, ignoreInit = TRUE)
 
     observe({
       net <- selected_network()
@@ -525,13 +574,7 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
 
         if (!is.null(global_data$object_pos_network) && !is.null(global_data$object_neg_network)) {
           update_progress_modal(88, "Merging positive and negative mode networks...")
-          merged_feature_network <- merge_polarity_feature_networks(
-            positive_object = global_data$object_pos_network,
-            negative_object = global_data$object_neg_network,
-            ppm = input$cross_ppm,
-            rt_tolerance = input$cross_rt_tolerance,
-            cor_cutoff = input$cross_cor_cutoff
-          )
+          merged_feature_network <- build_merged_network()
           global_data$merged_feature_network <- merged_feature_network
 
           if (!is.null(prj_init$mass_dataset_dir)) {
@@ -540,11 +583,13 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
           }
         }
 
-        update_progress_modal(98, "Saving results and preparing network display...")
-        update_progress_modal(100, "Done. Rendering the network panel may take a moment for large graphs.")
+        rendered_network(NULL)
+        render_state("idle")
+        update_progress_modal(98, "Saving results...")
+        update_progress_modal(100, "Done. Use Show Network to render the graph.")
         close_progress_modal()
         shinyjs::enable("run_network")
-        shinyalert::shinyalert("Feature Network Completed", "Feature relationships and empirical compounds are ready.", type = "success")
+        shinyalert::shinyalert("Feature Network Completed", "Feature relationships and empirical compounds are ready. Click Show Network when you want to render the graph.", type = "success")
       }, error = function(e) {
         close_progress_modal()
         shinyjs::enable("run_network")
@@ -593,7 +638,10 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
       )
     })
 
-    network_data <- reactive({
+    rendered_network <- reactiveVal(NULL)
+    render_state <- reactiveVal("idle")
+
+    build_network_display_data <- function() {
       net <- selected_network()
       if (nrow(net) == 0) {
         return(NULL)
@@ -615,6 +663,23 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
       make_network_display_data(object = obj, network = net,
                                 sub_network = input$sub_network,
                                 max_edges = input$max_render_edges)
+    }
+
+    observeEvent(input$render_network, {
+      render_state("rendering")
+      rendered_network(NULL)
+
+      session$onFlushed(function() {
+        tryCatch({
+          display <- isolate(build_network_display_data())
+          rendered_network(display)
+          render_state(if (is.null(display)) "empty" else "ready")
+        }, error = function(e) {
+          rendered_network(NULL)
+          render_state("error")
+          shinyalert::shinyalert("Network Rendering Failed", paste("Error:", e$message), type = "error")
+        })
+      }, once = TRUE)
     })
 
     output$network_title <- renderText({
@@ -626,7 +691,7 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
         "Negative Mode"
       }
       sub_label <- if (identical(input$sub_network, "all")) "All networks" else paste("Sub-network", input$sub_network)
-      display <- network_data()
+      display <- rendered_network()
       render_label <- if (!is.null(display) && isTRUE(display$truncated)) {
         paste0(" - showing top ", nrow(display$edges), " edges by confidence")
       } else {
@@ -636,17 +701,50 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
     })
 
     output$network_ui <- renderUI({
+      state <- render_state()
+      if (identical(state, "rendering")) {
+        return(div(
+          class = "d-flex flex-column align-items-center justify-content-center h-100 text-muted",
+          tags$div(class = "spinner-border text-primary mb-3", role = "status"),
+          tags$strong("Rendering network, please wait..."),
+          tags$small("Large interactive graphs can take a while to prepare and stabilize.")
+        ))
+      }
+      if (identical(state, "empty")) {
+        return(div(
+          class = "d-flex flex-column align-items-center justify-content-center h-100 text-muted",
+          bsicons::bs_icon("exclamation-circle"),
+          tags$strong(class = "mt-3", "No network edges available"),
+          tags$small("Try another ion mode, sub-network, or lower the confidence cutoff.")
+        ))
+      }
+      if (identical(state, "error")) {
+        return(div(
+          class = "d-flex flex-column align-items-center justify-content-center h-100 text-danger",
+          bsicons::bs_icon("x-circle"),
+          tags$strong(class = "mt-3", "Network rendering failed"),
+          tags$small("Check the error dialog and adjust the selected network view.")
+        ))
+      }
+      if (is.null(rendered_network())) {
+        return(div(
+          class = "d-flex flex-column align-items-center justify-content-center h-100 text-muted",
+          bsicons::bs_icon("diagram-3"),
+          tags$strong(class = "mt-3", "Network graph is not rendered yet"),
+          tags$small("Click Show Network above to render the selected view.")
+        ))
+      }
       if (isTRUE(input$interactive_plot)) {
-        visNetwork::visNetworkOutput(ns("network_vis"), height = "650px")
+        visNetwork::visNetworkOutput(ns("network_vis"), height = "790px")
       } else {
-        plotOutput(ns("network_static"), height = "650px")
+        plotOutput(ns("network_static"), height = "790px")
       }
     })
 
     output$network_vis <- visNetwork::renderVisNetwork({
-      display <- network_data()
+      display <- rendered_network()
       validate(need(!is.null(display), "No network edges available. Run detection first or lower the confidence cutoff."))
-      visNetwork::visNetwork(display$nodes, display$edges, height = "650px") |>
+      visNetwork::visNetwork(display$nodes, display$edges, height = "790px") |>
         visNetwork::visNodes(shape = "dot", size = 18, font = list(size = 18)) |>
         visNetwork::visGroups(groupname = "Parent ion", color = "#008080") |>
         visNetwork::visGroups(groupname = "ISF", color = "#d95f02") |>
@@ -660,11 +758,21 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
         visNetwork::visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) |>
         visNetwork::visInteraction(dragNodes = TRUE, dragView = TRUE, hover = TRUE, tooltipDelay = 80) |>
         visNetwork::visPhysics(enabled = TRUE, stabilization = TRUE) |>
-        visNetwork::visLegend(useGroups = TRUE, position = "right")
+        visNetwork::visLegend(useGroups = TRUE, position = "right") |>
+        visNetwork::visEvents(
+          selectNode = sprintf(
+            "function(nodes) { Shiny.setInputValue('%s', nodes.nodes[0] || null, {priority: 'event'}); }",
+            ns("node_selected")
+          ),
+          deselectNode = sprintf(
+            "function(nodes) { Shiny.setInputValue('%s', null, {priority: 'event'}); }",
+            ns("node_selected")
+          )
+        )
     })
 
     output$network_static <- renderPlot({
-      display <- network_data()
+      display <- rendered_network()
       validate(need(!is.null(display), "No network edges available. Run detection first or lower the confidence cutoff."))
       g <- igraph::graph_from_data_frame(display$edges[, c("from", "to")], directed = TRUE, vertices = display$nodes)
       node_colors <- c(
@@ -719,6 +827,182 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
       pseudo <- get_pseudo(input$view_mode)
       req(pseudo)
       DT::datatable(pseudo$feature_mapping, options = list(scrollX = TRUE, pageLength = 10))
+    })
+
+    selected_node_id <- reactive({
+      node_id <- input$node_selected
+      if (is.null(node_id) || !nzchar(node_id)) {
+        return(NULL)
+      }
+      node_id
+    })
+
+    selected_ms2_feature <- reactiveVal(NULL)
+
+    observeEvent(input$node_selected, {
+      node_id <- input$node_selected
+      selected_ms2_feature(if (is.null(node_id) || !nzchar(node_id)) NULL else node_id)
+    }, ignoreInit = TRUE)
+
+    observeEvent(plotly::event_data("plotly_click", source = "subnetwork_ms1"), {
+      click <- plotly::event_data("plotly_click", source = "subnetwork_ms1")
+      if (!is.null(click$key) && nzchar(click$key)) {
+        selected_ms2_feature(as.character(click$key))
+      }
+    }, ignoreInit = TRUE)
+
+    ms1_window_data <- reactive({
+      node_id <- selected_node_id()
+      req(node_id)
+      net <- selected_network()
+      validate(need(nrow(net) > 0, "No network edges available."))
+
+      if (identical(input$network_scope, "merged")) {
+        return(make_ms1_window_data(
+          positive_object = global_data$object_pos_network,
+          negative_object = global_data$object_neg_network,
+          network = net,
+          selected_id = node_id,
+          sub_network = input$sub_network
+        ))
+      }
+
+      obj <- selected_object()
+      validate(need(!is.null(obj), "No selected ion-mode object available."))
+      make_ms1_window_data(
+        object = obj,
+        network = net,
+        selected_id = node_id,
+        sub_network = input$sub_network
+      )
+    })
+
+    output$selected_node_text <- renderText({
+      node_id <- selected_node_id()
+      if (is.null(node_id)) {
+        return("Click a network node to inspect features within its retention-time window.")
+      }
+      dat <- ms1_window_data()
+      sel <- dat$features[dat$features$variable_id == node_id, , drop = FALSE]
+      if (nrow(sel) == 0) {
+        return(paste("Selected node:", node_id))
+      }
+      paste0(
+        "Selected: ", node_id,
+        " | m/z ", sprintf("%.5f", sel$mz[1]),
+        " | RT ", sprintf("%.2f", sel$rt[1]), " sec",
+        " | sub-network features: ", nrow(dat$features)
+      )
+    })
+
+    output$ms1_window_plot <- plotly::renderPlotly({
+      node_id <- selected_node_id()
+      validate(need(!is.null(node_id), "Click a node in the interactive network."))
+
+      dat <- ms1_window_data()
+      plot_ms1_window(dat)
+    })
+
+    selected_ms1_peak_id <- reactive({
+      peak_id <- selected_ms2_feature()
+      if (is.null(peak_id) || !nzchar(peak_id)) selected_node_id() else peak_id
+    })
+
+    ms2_spectrum_data <- reactive({
+      feature_id <- selected_ms1_peak_id()
+      req(feature_id)
+
+      if (identical(input$network_scope, "merged")) {
+        return(make_ms2_spectrum_data(
+          positive_object = global_data$object_pos_network,
+          negative_object = global_data$object_neg_network,
+          feature_id = feature_id,
+          mz_tol = input$ms2_fragment_mz_tol,
+        ms2_mz_tol_ppm = input$ms2_mz_tol_ppm,
+        ms2_rt_tol = input$ms2_rt_tol,
+        top_n = input$ms2_top_n_annotate
+      ))
+      }
+
+      obj <- selected_object()
+      validate(need(!is.null(obj), "No selected ion-mode object available."))
+      make_ms2_spectrum_data(
+        object = obj,
+        feature_id = feature_id,
+        mz_tol = input$ms2_fragment_mz_tol,
+        ms2_mz_tol_ppm = input$ms2_mz_tol_ppm,
+        ms2_rt_tol = input$ms2_rt_tol,
+        top_n = input$ms2_top_n_annotate
+      )
+    })
+
+    output$selected_ms2_text <- renderText({
+      feature_id <- selected_ms1_peak_id()
+      if (is.null(feature_id)) {
+        return("Click an MS1 peak to inspect its assigned MS2 spectrum.")
+      }
+      dat <- ms2_spectrum_data()
+      if (nrow(dat$peaks) == 0) {
+        return(paste("MS2:", feature_id, "- no assigned MS2 spectrum available."))
+      }
+      paste0(
+        "MS2: ", feature_id,
+        " | precursor m/z ", sprintf("%.5f", dat$precursor_mz),
+        " | top peaks checked: ", sum(dat$peaks$annotate),
+        " | diagnostic fragments: ", sum(nzchar(dat$peaks$fragment_annotation)),
+        " | NL pairs: ", nrow(dat$nl_arrows)
+      )
+    })
+
+    output$ms2_spectrum_plot <- plotly::renderPlotly({
+      feature_id <- selected_ms1_peak_id()
+      validate(need(!is.null(feature_id), "Click an MS1 peak above."))
+      plot_ms2_spectrum(ms2_spectrum_data())
+    })
+
+    feature_eic_data <- reactive({
+      feature_id <- selected_ms1_peak_id()
+      req(feature_id)
+
+      if (identical(input$network_scope, "merged")) {
+        return(make_feature_eic_data(
+          wd = prj_init$wd,
+          positive_object = global_data$object_pos_network,
+          negative_object = global_data$object_neg_network,
+          feature_id = feature_id
+        ))
+      }
+
+      obj <- selected_object()
+      validate(need(!is.null(obj), "No selected ion-mode object available."))
+      make_feature_eic_data(
+        wd = prj_init$wd,
+        object = obj,
+        feature_id = feature_id,
+        mode = input$view_mode
+      )
+    })
+
+    output$selected_eic_text <- renderText({
+      feature_id <- selected_ms1_peak_id()
+      if (is.null(feature_id)) {
+        return("Click an MS1 peak to inspect its raw chromatogram when XCMS xdata is available.")
+      }
+      dat <- feature_eic_data()
+      if (!isTRUE(dat$available)) {
+        return(paste("Chromatogram:", feature_id, "-", dat$message))
+      }
+      paste0(
+        "Chromatogram: ", feature_id,
+        " | traces: ", length(unique(dat$data$sample)),
+        " | xdata: ", basename(dat$xdata_path)
+      )
+    })
+
+    output$feature_eic_plot <- plotly::renderPlotly({
+      feature_id <- selected_ms1_peak_id()
+      validate(need(!is.null(feature_id), "Click an MS1 peak above."))
+      plot_feature_eic(feature_eic_data())
     })
   })
 }
@@ -915,4 +1199,742 @@ get_network_component_membership <- function(network) {
                                          directed = FALSE,
                                          vertices = data.frame(name = feature_ids))
   igraph::components(graph)$membership
+}
+
+make_ms1_window_data <- function(object = NULL,
+                                 positive_object = NULL,
+                                 negative_object = NULL,
+                                 network,
+                                 selected_id,
+                                 sub_network = "all") {
+  feature_table <- if (!is.null(object)) {
+    feature_spectrum_table(object)
+  } else {
+    dplyr::bind_rows(
+      feature_spectrum_table(positive_object, prefix = "pos"),
+      feature_spectrum_table(negative_object, prefix = "neg")
+    )
+  }
+
+  if (nrow(feature_table) == 0) {
+    return(list(features = feature_table, arrows = data.frame(), selected_id = selected_id))
+  }
+
+  subnet_ids <- get_selected_subnetwork_ids(network, selected_id, sub_network)
+  if (length(subnet_ids) == 0) {
+    return(list(features = feature_table[0, , drop = FALSE], arrows = data.frame(), selected_id = selected_id))
+  }
+
+  features <- feature_table[feature_table$variable_id %in% subnet_ids, , drop = FALSE]
+  features <- features[order(features$rt, features$mz), , drop = FALSE]
+  features$is_selected <- features$variable_id == selected_id
+  features$hover <- sprintf(
+    "Feature: %s<br>m/z: %.5f<br>RT: %.2f sec<br>Mean intensity: %.3g",
+    features$variable_id,
+    features$mz,
+    features$rt,
+    features$mean_intensity
+  )
+
+  isf_edges <- network[
+    network$type %in% c("ISF", "Cross-polarity ISF") &
+      network$from %in% subnet_ids & network$to %in% subnet_ids,
+    ,
+    drop = FALSE
+  ]
+  isf_edges <- isf_edges[
+    isf_edges$from %in% features$variable_id & isf_edges$to %in% features$variable_id,
+    ,
+    drop = FALSE
+  ]
+
+  arrows <- if (nrow(isf_edges) > 0) {
+    from_idx <- match(isf_edges$from, features$variable_id)
+    to_idx <- match(isf_edges$to, features$variable_id)
+    y <- features$mean_intensity[from_idx]
+    yend <- features$mean_intensity[to_idx]
+    y[!is.finite(y)] <- 0
+    yend[!is.finite(yend)] <- 0
+    y_base <- pmax(y, yend, na.rm = TRUE)
+    y_base[!is.finite(y_base)] <- 0
+    y_pad <- max(features$mean_intensity, na.rm = TRUE) * 0.08
+    if (!is.finite(y_pad) || y_pad <= 0) y_pad <- 1
+    data.frame(
+      from = isf_edges$from,
+      to = isf_edges$to,
+      x = features$mz[from_idx],
+      y = y,
+      xend = features$mz[to_idx],
+      yend = yend,
+      y_arrow = y_base + y_pad,
+      label = isf_annotation_label(features$mz[to_idx], isf_edges$annotation),
+      stringsAsFactors = FALSE
+    )
+  } else {
+    data.frame(
+      from = character(), to = character(), x = numeric(), y = numeric(),
+      xend = numeric(), yend = numeric(), y_arrow = numeric(), label = character()
+    )
+  }
+
+  list(features = features, arrows = arrows, selected_id = selected_id)
+}
+
+get_selected_subnetwork_ids <- function(network, selected_id, sub_network = "all") {
+  if (nrow(network) == 0) {
+    return(character())
+  }
+
+  membership <- get_network_component_membership(network)
+  if (!identical(sub_network, "all")) {
+    return(names(membership)[membership == as.integer(sub_network)])
+  }
+
+  if (!selected_id %in% names(membership)) {
+    return(character())
+  }
+  names(membership)[membership == membership[[selected_id]]]
+}
+
+feature_spectrum_table <- function(object, prefix = NULL) {
+  if (is.null(object)) {
+    return(data.frame(variable_id = character(), mz = numeric(), rt = numeric(),
+                      mean_intensity = numeric(), polarity = character()))
+  }
+
+  variable_info <- massdataset::extract_variable_info(object)
+  expression_data <- massdataset::extract_expression_data(object)
+  if (!all(c("variable_id", "mz", "rt") %in% colnames(variable_info))) {
+    return(data.frame(variable_id = character(), mz = numeric(), rt = numeric(),
+                      mean_intensity = numeric(), polarity = character()))
+  }
+
+  variable_info$variable_id <- as.character(variable_info$variable_id)
+  row_ids <- intersect(variable_info$variable_id, rownames(expression_data))
+  variable_info <- variable_info[match(row_ids, variable_info$variable_id), , drop = FALSE]
+  expression_data <- expression_data[row_ids, , drop = FALSE]
+  expression_data <- suppressWarnings(as.data.frame(
+    lapply(expression_data, function(x) as.numeric(as.character(x))),
+    check.names = FALSE
+  ))
+
+  mean_intensity <- rowMeans(as.matrix(expression_data), na.rm = TRUE)
+  mean_intensity[!is.finite(mean_intensity)] <- NA_real_
+
+  out <- data.frame(
+    variable_id = variable_info$variable_id,
+    mz = suppressWarnings(as.numeric(variable_info$mz)),
+    rt = suppressWarnings(as.numeric(variable_info$rt)),
+    mean_intensity = mean_intensity,
+    polarity = if (is.null(prefix)) NA_character_ else prefix,
+    stringsAsFactors = FALSE
+  )
+  if (!is.null(prefix)) {
+    out$variable_id <- paste(prefix, out$variable_id, sep = "::")
+  }
+  out
+}
+
+plot_ms1_window <- function(ms1_data) {
+  features <- ms1_data$features
+  validate(need(nrow(features) > 0, "No features found in the selected sub-network."))
+
+  marker_color <- ifelse(features$is_selected, "#d95f02", "#2c7fb8")
+  marker_size <- ifelse(features$is_selected, 12, 8)
+  y_for_plot <- features$mean_intensity
+  y_for_plot[!is.finite(y_for_plot)] <- 0
+
+  stick_shapes <- lapply(seq_len(nrow(features)), function(i) {
+    list(
+      type = "line",
+      x0 = features$mz[i],
+      x1 = features$mz[i],
+      y0 = 0,
+      y1 = y_for_plot[i],
+      xref = "x",
+      yref = "y",
+      line = list(color = marker_color[i], width = if (features$is_selected[i]) 2.5 else 1.4)
+    )
+  })
+
+  p <- plotly::plot_ly(
+    data = features,
+    x = ~mz,
+    y = y_for_plot,
+    key = ~variable_id,
+    source = "subnetwork_ms1",
+    type = "scatter",
+    mode = "markers",
+    text = ~hover,
+    hoverinfo = "text",
+    marker = list(color = marker_color, size = marker_size, opacity = 0.82)
+  )
+
+  if (nrow(ms1_data$arrows) > 0) {
+    for (i in seq_len(nrow(ms1_data$arrows))) {
+      arrow <- ms1_data$arrows[i, ]
+      p <- plotly::add_trace(
+        p,
+        x = c(arrow$x, arrow$xend),
+        y = c(arrow$y_arrow, arrow$y_arrow),
+        type = "scatter",
+        mode = "lines",
+        line = list(color = "#d95f02", width = 1.5, dash = "dot"),
+        text = arrow$label,
+        hoverinfo = "text",
+        showlegend = FALSE,
+        inherit = FALSE
+      )
+    }
+    annotations <- lapply(seq_len(nrow(ms1_data$arrows)), function(i) {
+      arrow <- ms1_data$arrows[i, ]
+      list(
+        x = arrow$xend,
+        y = arrow$y_arrow,
+        ax = arrow$x,
+        ay = arrow$y_arrow,
+        xref = "x",
+        yref = "y",
+        axref = "x",
+        ayref = "y",
+        text = "",
+        showarrow = TRUE,
+        arrowhead = 3,
+        arrowsize = 1,
+        arrowwidth = 1.5,
+        arrowcolor = "#d95f02"
+      )
+    })
+  } else {
+    annotations <- list()
+  }
+
+  plotly::layout(
+    p,
+    shapes = stick_shapes,
+    annotations = annotations,
+    xaxis = list(title = "m/z", zeroline = FALSE),
+    yaxis = list(title = "Mean feature intensity", rangemode = "tozero", zeroline = TRUE),
+    margin = list(l = 65, r = 25, t = 20, b = 55),
+    showlegend = FALSE
+  ) |>
+    plotly::event_register("plotly_click")
+}
+
+isf_annotation_label <- function(fragment_mz, annotation) {
+  annotation <- ifelse(is.na(annotation) | !nzchar(annotation), "ISF", annotation)
+  label <- ifelse(grepl("NL|loss|Loss|neutral", annotation),
+                  annotation,
+                  paste0("NL: ", annotation))
+  sprintf("m/z=%.5f, %s", fragment_mz, label)
+}
+
+make_ms2_spectrum_data <- function(object = NULL,
+                                   positive_object = NULL,
+                                   negative_object = NULL,
+                                   feature_id,
+                                   mz_tol = 0.02,
+                                   ms2_mz_tol_ppm = 5,
+                                   ms2_rt_tol = 10,
+                                   top_n = 12) {
+  if (!is.null(object)) {
+    return(extract_feature_ms2_data(
+      object = object,
+      feature_id = feature_id,
+      display_id = feature_id,
+      mz_tol = mz_tol,
+      ms2_mz_tol_ppm = ms2_mz_tol_ppm,
+      ms2_rt_tol = ms2_rt_tol,
+      top_n = top_n
+    ))
+  }
+
+  if (grepl("^pos::", feature_id)) {
+    return(extract_feature_ms2_data(
+      object = positive_object,
+      feature_id = sub("^pos::", "", feature_id),
+      display_id = feature_id,
+      mz_tol = mz_tol,
+      ms2_mz_tol_ppm = ms2_mz_tol_ppm,
+      ms2_rt_tol = ms2_rt_tol,
+      top_n = top_n
+    ))
+  }
+
+  if (grepl("^neg::", feature_id)) {
+    return(extract_feature_ms2_data(
+      object = negative_object,
+      feature_id = sub("^neg::", "", feature_id),
+      display_id = feature_id,
+      mz_tol = mz_tol,
+      ms2_mz_tol_ppm = ms2_mz_tol_ppm,
+      ms2_rt_tol = ms2_rt_tol,
+      top_n = top_n
+    ))
+  }
+
+  empty_ms2_plot_data(feature_id)
+}
+
+extract_feature_ms2_data <- function(object,
+                                     feature_id,
+                                     display_id,
+                                     mz_tol,
+                                     ms2_mz_tol_ppm,
+                                     ms2_rt_tol,
+                                     top_n) {
+  if (is.null(object)) {
+    return(empty_ms2_plot_data(display_id))
+  }
+
+  variable_info <- massdataset::extract_variable_info(object)
+  if (!all(c("variable_id", "mz", "rt") %in% colnames(variable_info))) {
+    return(empty_ms2_plot_data(display_id))
+  }
+  variable_info$variable_id <- as.character(variable_info$variable_id)
+  selected <- variable_info[variable_info$variable_id == feature_id, , drop = FALSE]
+  if (nrow(selected) == 0) {
+    return(empty_ms2_plot_data(display_id))
+  }
+
+  ms2_index <- prepare_ms2_feature_index(
+    object = object,
+    variable_info = variable_info,
+    mz_tol_ppm = ms2_mz_tol_ppm,
+    rt_tol_sec = ms2_rt_tol
+  )
+  if (nrow(ms2_index$meta) == 0 || !feature_id %in% names(ms2_index$spectra)) {
+    return(empty_ms2_plot_data(display_id, selected$mz[1], selected$rt[1]))
+  }
+
+  peaks <- as.data.frame(as_ms2_peak_matrix(ms2_index$spectra[[feature_id]]))
+  if (nrow(peaks) == 0) {
+    return(empty_ms2_plot_data(display_id, selected$mz[1], selected$rt[1]))
+  }
+  colnames(peaks) <- c("mz", "intensity")
+  peaks$relative_intensity <- 100 * peaks$intensity / max(peaks$intensity, na.rm = TRUE)
+  top_n <- max(1, min(as.integer(top_n), nrow(peaks)))
+  top_idx <- order(peaks$relative_intensity, decreasing = TRUE)[seq_len(top_n)]
+  peaks$annotate <- seq_len(nrow(peaks)) %in% top_idx
+  peaks$fragment_annotation <- ""
+  peaks$fragment_annotation[top_idx] <- annotate_ms2_fragment_peaks(
+    peaks$mz,
+    annotate_idx = top_idx,
+    mz_tol = mz_tol
+  )
+  nl_arrows <- annotate_ms2_neutral_loss_pairs(
+    peaks = peaks,
+    mz_tol = mz_tol,
+    top_idx = top_idx
+  )
+  peaks$hover <- sprintf(
+    "m/z: %.5f<br>Intensity: %.3g<br>Relative: %.1f%%<br>%s",
+    peaks$mz,
+    peaks$intensity,
+    peaks$relative_intensity,
+    ifelse(nzchar(peaks$fragment_annotation),
+           paste0("Diagnostic fragment: ", peaks$fragment_annotation),
+           "Diagnostic fragment: -")
+  )
+
+  meta <- ms2_index$meta[feature_id, , drop = FALSE]
+  list(
+    feature_id = display_id,
+    precursor_mz = as.numeric(selected$mz[1]),
+    precursor_rt = as.numeric(selected$rt[1]),
+    ms2_meta = meta,
+    peaks = peaks,
+    nl_arrows = nl_arrows
+  )
+}
+
+empty_ms2_plot_data <- function(feature_id, precursor_mz = NA_real_, precursor_rt = NA_real_) {
+  list(
+    feature_id = feature_id,
+    precursor_mz = precursor_mz,
+    precursor_rt = precursor_rt,
+    ms2_meta = data.frame(),
+    peaks = data.frame(
+      mz = numeric(),
+      intensity = numeric(),
+      relative_intensity = numeric(),
+      annotate = logical(),
+      fragment_annotation = character(),
+      hover = character(),
+      stringsAsFactors = FALSE
+    ),
+    nl_arrows = data.frame(
+      x = numeric(), xend = numeric(), y = numeric(), label = character(),
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
+annotate_ms2_fragment_peaks <- function(mz, annotate_idx, mz_tol = 0.02) {
+  fragment_table <- default_plant_fragment_ion_table()
+
+  out <- rep("", length(mz))
+  out[annotate_idx] <- vapply(mz[annotate_idx], function(x) {
+    labels <- character()
+
+    fragment_hit <- which(abs(fragment_table$fragment_mz - x) <= mz_tol)
+    if (length(fragment_hit) > 0) {
+      labels <- c(labels, paste0("Frag: ", fragment_table$assignment[fragment_hit[1]]))
+    }
+
+    paste(unique(labels), collapse = "; ")
+  }, character(1))
+  out
+}
+
+annotate_ms2_neutral_loss_pairs <- function(peaks, mz_tol = 0.02, top_idx = seq_len(nrow(peaks))) {
+  neutral_loss_table <- default_neutral_loss_table()
+  if (nrow(peaks) < 2 || length(top_idx) < 2) {
+    return(data.frame(x = numeric(), xend = numeric(), y = numeric(), label = character()))
+  }
+
+  top_idx <- top_idx[order(peaks$mz[top_idx])]
+  arrows <- list()
+  arrow_idx <- 1L
+  y_pad <- 8
+
+  for (i in seq_along(top_idx)) {
+    for (j in seq_along(top_idx)) {
+      if (j <= i) next
+      low <- top_idx[i]
+      high <- top_idx[j]
+      delta <- peaks$mz[high] - peaks$mz[low]
+      hit <- which(abs(neutral_loss_table$mass - delta) <= mz_tol)
+      if (length(hit) == 0) next
+
+      y <- max(peaks$relative_intensity[c(low, high)], na.rm = TRUE) + y_pad
+      y <- min(y, 105)
+      arrows[[arrow_idx]] <- data.frame(
+        x = peaks$mz[high],
+        xend = peaks$mz[low],
+        y = y,
+        label = sprintf("NL: %s (%.5f)", neutral_loss_table$annotation[hit[1]], delta),
+        stringsAsFactors = FALSE
+      )
+      arrow_idx <- arrow_idx + 1L
+    }
+  }
+
+  if (length(arrows) == 0) {
+    return(data.frame(x = numeric(), xend = numeric(), y = numeric(), label = character()))
+  }
+
+  do.call(rbind, arrows)
+}
+
+plot_ms2_spectrum <- function(ms2_data) {
+  peaks <- ms2_data$peaks
+  validate(need(nrow(peaks) > 0, "No assigned MS2 spectrum available for the selected peak."))
+
+  shapes <- lapply(seq_len(nrow(peaks)), function(i) {
+    list(
+      type = "line",
+      x0 = peaks$mz[i],
+      x1 = peaks$mz[i],
+      y0 = 0,
+      y1 = peaks$relative_intensity[i],
+      xref = "x",
+      yref = "y",
+      line = list(
+        color = if (peaks$annotate[i] && nzchar(peaks$fragment_annotation[i])) "#d95f02" else "#4d4d4d",
+        width = if (peaks$annotate[i]) 2 else 1
+      )
+    )
+  })
+
+  nl_shapes <- lapply(seq_len(nrow(ms2_data$nl_arrows)), function(i) {
+    arrow <- ms2_data$nl_arrows[i, ]
+    list(
+      type = "line",
+      x0 = arrow$x,
+      x1 = arrow$xend,
+      y0 = arrow$y,
+      y1 = arrow$y,
+      xref = "x",
+      yref = "y",
+      line = list(color = "#d95f02", width = 1.5, dash = "dot")
+    )
+  })
+
+  nl_annotations <- lapply(seq_len(nrow(ms2_data$nl_arrows)), function(i) {
+    arrow <- ms2_data$nl_arrows[i, ]
+    list(
+      x = arrow$xend,
+      y = arrow$y,
+      ax = arrow$x,
+      ay = arrow$y,
+      xref = "x",
+      yref = "y",
+      axref = "x",
+      ayref = "y",
+      text = "",
+      showarrow = TRUE,
+      arrowhead = 3,
+      arrowsize = 1,
+      arrowwidth = 1.5,
+      arrowcolor = "#d95f02"
+    )
+  })
+
+  plotly::plot_ly(
+    data = peaks,
+    x = ~mz,
+    y = ~relative_intensity,
+    type = "scatter",
+    mode = "markers",
+    text = ~hover,
+    hoverinfo = "text",
+    marker = list(size = 5, color = ifelse(peaks$annotate, "#d95f02", "#4d4d4d"))
+  ) |>
+    plotly::add_trace(
+      data = ms2_data$nl_arrows,
+      x = ~((x + xend) / 2),
+      y = ~y,
+      type = "scatter",
+      mode = "markers",
+      text = ~label,
+      hoverinfo = "text",
+      marker = list(size = 8, color = "rgba(217,95,2,0.001)"),
+      showlegend = FALSE,
+      inherit = FALSE
+    ) |>
+    plotly::layout(
+      shapes = c(shapes, nl_shapes),
+      annotations = nl_annotations,
+      xaxis = list(title = "m/z", zeroline = FALSE),
+      yaxis = list(title = "Relative intensity (%)", range = c(0, 108), zeroline = TRUE),
+      margin = list(l = 65, r = 25, t = 20, b = 55),
+      showlegend = FALSE
+    )
+}
+
+make_feature_eic_data <- function(wd,
+                                  object = NULL,
+                                  positive_object = NULL,
+                                  negative_object = NULL,
+                                  feature_id,
+                                  mode = NULL,
+                                  expand_rt = 15,
+                                  expand_mz = 0.01,
+                                  max_traces = 8) {
+  if (!is.null(object)) {
+    return(extract_feature_eic_data(
+      wd = wd,
+      object = object,
+      feature_id = feature_id,
+      display_id = feature_id,
+      mode = mode,
+      expand_rt = expand_rt,
+      expand_mz = expand_mz,
+      max_traces = max_traces
+    ))
+  }
+
+  if (grepl("^pos::", feature_id)) {
+    return(extract_feature_eic_data(
+      wd = wd,
+      object = positive_object,
+      feature_id = sub("^pos::", "", feature_id),
+      display_id = feature_id,
+      mode = "positive",
+      expand_rt = expand_rt,
+      expand_mz = expand_mz,
+      max_traces = max_traces
+    ))
+  }
+
+  if (grepl("^neg::", feature_id)) {
+    return(extract_feature_eic_data(
+      wd = wd,
+      object = negative_object,
+      feature_id = sub("^neg::", "", feature_id),
+      display_id = feature_id,
+      mode = "negative",
+      expand_rt = expand_rt,
+      expand_mz = expand_mz,
+      max_traces = max_traces
+    ))
+  }
+
+  empty_eic_plot_data(feature_id, "Unable to determine ion mode for selected feature.")
+}
+
+extract_feature_eic_data <- function(wd,
+                                     object,
+                                     feature_id,
+                                     display_id,
+                                     mode,
+                                     expand_rt,
+                                     expand_mz,
+                                     max_traces) {
+  if (is.null(wd) || !dir.exists(wd)) {
+    return(empty_eic_plot_data(display_id, "Project MS1 directory is not available."))
+  }
+  if (is.null(object)) {
+    return(empty_eic_plot_data(display_id, "No mass_dataset object is available."))
+  }
+
+  xdata_path <- find_xcms_xdata_path(wd, mode)
+  if (is.null(xdata_path)) {
+    return(empty_eic_plot_data(display_id, "No massprocesser xdata file was detected."))
+  }
+
+  variable_info <- massdataset::extract_variable_info(object)
+  variable_info$variable_id <- as.character(variable_info$variable_id)
+  selected <- variable_info[variable_info$variable_id == feature_id, , drop = FALSE]
+  if (nrow(selected) == 0 || !all(c("mz", "rt") %in% colnames(selected))) {
+    return(empty_eic_plot_data(display_id, "Selected feature is missing m/z or RT metadata."))
+  }
+
+  env <- new.env(parent = emptyenv())
+  load(xdata_path, envir = env)
+  xdata_name <- intersect(c("xdata3", "xdata2", "xdata"), ls(env))[1]
+  if (is.na(xdata_name)) {
+    return(empty_eic_plot_data(display_id, "Detected xdata file does not contain an XCMS object."))
+  }
+  xdata <- env[[xdata_name]]
+
+  mz <- as.numeric(selected$mz[1])
+  rt <- as.numeric(selected$rt[1])
+  if (!is.finite(mz) || !is.finite(rt)) {
+    return(empty_eic_plot_data(display_id, "Selected feature has invalid m/z or RT."))
+  }
+
+  chrom <- tryCatch(
+    xcms::chromatogram(
+      object = xdata,
+      mz = c(mz - expand_mz, mz + expand_mz),
+      rt = c(rt - expand_rt, rt + expand_rt),
+      aggregationFun = "max",
+      missing = 0,
+      include = "any"
+    ),
+    error = function(e) e
+  )
+  if (inherits(chrom, "error")) {
+    return(empty_eic_plot_data(display_id, paste("Could not extract chromatogram:", chrom$message)))
+  }
+
+  eic_data <- xchromatograms_to_plot_data(chrom, max_traces = max_traces)
+  if (nrow(eic_data) == 0) {
+    return(empty_eic_plot_data(display_id, "No chromatographic signal was extracted for this feature."))
+  }
+
+  list(
+    available = TRUE,
+    feature_id = display_id,
+    mz = mz,
+    rt = rt,
+    xdata_path = xdata_path,
+    data = eic_data,
+    message = "OK"
+  )
+}
+
+find_xcms_xdata_path <- function(wd, mode) {
+  mode_dir <- if (identical(mode, "negative")) "NEG" else "POS"
+  ms1_root <- file.path(wd, "MS1")
+  if (!dir.exists(ms1_root)) {
+    return(NULL)
+  }
+
+  candidates <- list.files(
+    ms1_root,
+    pattern = "^(xdata3|xdata2|xdata)$",
+    recursive = TRUE,
+    full.names = TRUE,
+    all.files = FALSE,
+    no.. = TRUE
+  )
+  candidates <- candidates[
+    grepl(paste0(.Platform$file.sep, mode_dir, .Platform$file.sep), candidates) &
+      grepl(paste0(.Platform$file.sep, "Result", .Platform$file.sep, "intermediate_data", .Platform$file.sep), candidates)
+  ]
+  if (length(candidates) == 0) {
+    return(NULL)
+  }
+
+  priority <- match(basename(candidates), c("xdata3", "xdata2", "xdata"))
+  candidates[order(priority, nchar(candidates))][1]
+}
+
+xchromatograms_to_plot_data <- function(chrom, max_traces = 8) {
+  dims <- dim(chrom)
+  if (length(dims) != 2 || dims[1] < 1 || dims[2] < 1) {
+    return(data.frame(rt = numeric(), intensity = numeric(), sample = character()))
+  }
+
+  traces <- list()
+  sample_names <- colnames(chrom)
+  if (is.null(sample_names)) {
+    sample_names <- paste0("sample_", seq_len(dims[2]))
+  }
+
+  trace_summaries <- numeric(dims[2])
+  for (j in seq_len(dims[2])) {
+    chr <- chrom@.Data[[1, j]]
+    ints <- MSnbase::intensity(chr)
+    trace_summaries[j] <- if (length(ints) > 0) max(ints, na.rm = TRUE) else NA_real_
+  }
+  keep_cols <- order(trace_summaries, decreasing = TRUE, na.last = NA)
+  keep_cols <- utils::head(keep_cols, max_traces)
+
+  for (j in keep_cols) {
+    chr <- chrom@.Data[[1, j]]
+    rts <- MSnbase::rtime(chr)
+    ints <- MSnbase::intensity(chr)
+    if (length(rts) == 0 || length(ints) == 0) {
+      next
+    }
+    traces[[length(traces) + 1L]] <- data.frame(
+      rt = rts,
+      intensity = ints,
+      sample = sample_names[j],
+      stringsAsFactors = FALSE
+    )
+  }
+
+  if (length(traces) == 0) {
+    return(data.frame(rt = numeric(), intensity = numeric(), sample = character()))
+  }
+  do.call(rbind, traces)
+}
+
+empty_eic_plot_data <- function(feature_id, message) {
+  list(
+    available = FALSE,
+    feature_id = feature_id,
+    mz = NA_real_,
+    rt = NA_real_,
+    xdata_path = NA_character_,
+    data = data.frame(rt = numeric(), intensity = numeric(), sample = character()),
+    message = message
+  )
+}
+
+plot_feature_eic <- function(eic_data) {
+  validate(need(isTRUE(eic_data$available), eic_data$message))
+  validate(need(nrow(eic_data$data) > 0, "No chromatogram points available."))
+
+  plotly::plot_ly(
+    data = eic_data$data,
+    x = ~rt,
+    y = ~intensity,
+    color = ~sample,
+    type = "scatter",
+    mode = "lines",
+    hoverinfo = "text",
+    text = ~sprintf("Sample: %s<br>RT: %.2f sec<br>Intensity: %.3g", sample, rt, intensity)
+  ) |>
+    plotly::layout(
+      xaxis = list(title = "Retention time (sec)", zeroline = FALSE),
+      yaxis = list(title = "Raw EIC intensity", rangemode = "tozero", zeroline = TRUE),
+      margin = list(l = 65, r = 20, t = 10, b = 45),
+      legend = list(orientation = "h", x = 0, y = -0.25)
+    )
 }

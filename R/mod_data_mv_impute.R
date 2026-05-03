@@ -68,7 +68,8 @@ mod_data_impute_ui <- function(id) {
                    # Note: nPcs is common for PCA-based methods
                    conditionalPanel(
                      condition = sprintf("['bpca', 'ppca', 'svdImpute'].includes(input['%s'])", ns("impute_method")),
-                     tags$h6(class="fw-bold text-info", "PCA/SVD Parameters"),
+                     tags$h6(class = "fw-bold", style = "color: #343a40;",
+                             "PCA/SVD Parameters"),
                      numericInput(ns("pca_nPcs"), "Number of PCs (nPcs)", value = 2, min = 1, step = 1),
 
                      # BPCA specific

@@ -1,136 +1,110 @@
-# Per-Peak Intensity Noise Filter — Principles & Algorithm
+# Blank-Informed Intensity Masking - Principles & Algorithm
 
 ## Motivation
 
-In untargeted LC-MS metabolomics, not every detected peak represents a genuine signal. Low-intensity peaks often arise from electrical noise, chemical background, or contaminants rather than from biological analytes. Common practice in tools like XCMS and MZmine is to apply a hard intensity cutoff (e.g., `> 10⁴` counts) during peak picking. However, a fixed threshold risks:
+MetMiner uses `massprocesser::process_data()`, which in turn uses XCMS centWave peak picking. During peak picking, XCMS already applies intensity-related thresholds such as `noise`, `prefilter`, and `snthresh`. Those parameters decide which raw centroids, ROIs, and chromatographic peaks are eligible to enter the feature table.
 
-- **False negatives**: genuine low-abundance features (e.g., trace secondary metabolites) may fall below the cutoff.
-- **Batch insensitivity**: signal intensity varies across instruments, columns, and runs — a threshold calibrated on one batch may not transfer.
+The masking step described here does **not** replace those XCMS thresholds. It is a post-picking quality-control step on the final feature table. Its purpose is narrower:
 
-MetMiner's approach defers this filtering to the post-import stage, where the noise floor can be estimated **from the data itself** rather than from an arbitrary constant.
+- use blank samples to estimate feature-specific background;
+- mask non-blank sample intensities that do not clearly exceed that background;
+- let the downstream missing-value (MV) filter remove features that become mostly missing after masking.
+
+This is useful because blank samples are carried through the Tidymass/massprocesser workflow as ordinary samples and class labels. They are not automatically used to subtract background or remove blank-dominated features during peak picking.
 
 ## Where It Fits
 
-The intensity filter operates as **Step 0** in the noise-removal pipeline, before feature-level filtering:
+The recommended noise-removal sequence is:
 
 ```
-Step 0: Per-peak intensity filter  ← marks individual low-intensity cells as NA
-Step 1: Blank ratio filter         ← removes features dominated by blank signal
-Step 2: MV filter (QC / group)     ← removes features with too many NAs
-Step 3: RSD filter (QC)            ← removes features with high QC variability
+Step 0: Optional blank-informed intensity masking
+Step 1: Blank ratio filter
+Step 2: MV filter (QC / biological groups)
+Step 3: RSD filter (QC)
 ```
 
-After Step 0 sets low-intensity peaks to `NA`, the downstream MV filter (Step 2) naturally removes features that accumulate too many missing values across samples. This two-stage design decouples the *measurement-level* decision ("is this peak above noise?") from the *feature-level* decision ("is this feature sufficiently present to analyze?").
+Step 0 operates at the measurement level: one feature by one sample. Step 1 and later operate at the feature level.
 
----
+This distinction matters. A feature can pass XCMS peak picking and still contain weak, blank-like values in some biological samples. Masking those values as `NA` makes the MV filter more informative.
 
-## Algorithm
+## Recommended Method: Blank-Informed Masking
 
-Two methods are available, selected by the `method` parameter. **Blank-based** is the preferred approach when blank samples exist; **distribution-based** is a fallback for experiments without blanks.
-
-### Method 1 — Blank-based noise estimation (`method = "blank"`)
-
-This is the gold standard. Blank samples contain only background signal, so their intensities directly measure the noise distribution for each feature.
+Use this method when at least two blank samples are present.
 
 For each feature `i`:
 
-1. Compute the mean (`μ_blank`) and standard deviation (`σ_blank`) of its intensity across all blank samples.
-2. If `σ_blank = 0` (e.g., a single blank or all identical values), substitute the median `σ_blank` across all features to avoid a zero-width threshold.
-3. Compute the noise cutoff:
+1. Extract intensities across blank samples.
+2. Compute the blank mean and standard deviation:
 
 ```
-cutoff_i = μ_blank,i + k × σ_blank,i
+blank_mean_i
+blank_sd_i
 ```
 
-where `k` is `blank_sd_multiplier` (default 3).
-
-4. For every **non-blank** sample `j`, set:
-
-```
-if intensity_i,j < cutoff_i → NA
-```
-
-Blanks themselves are not filtered — they serve only as the noise reference.
-
-**Rationale for `k = 3`**: Under the assumption of approximately normal noise, `μ + 3σ` corresponds to a false-positive rate of ~0.15%. In practice, LC-MS noise is right-skewed, so the actual FPR is somewhat higher, but the downstream MV filter provides a second safeguard.
-
-**Prerequisite**: at least 2 blank samples. With a single blank, `σ` cannot be estimated per feature, and the method auto-falls back to distribution-based.
-
-### Method 2 — Distribution-based antimode detection (`method = "distribution"`)
-
-When no blank samples are available, the noise floor is estimated from each sample's own intensity distribution. In untargeted metabolomics data, the log-intensity distribution across features within a single sample is typically **bimodal**:
-
-- **Noise mode** (low intensity): thousands of low-abundance features from background, artifacts, and near-baseline peaks.
-- **Signal mode** (higher intensity): genuine metabolite features.
-
-The valley (antimode) between these two modes provides a natural, sample-specific noise cutoff.
-
-#### Algorithm per sample `j`:
-
-1. Take all non-NA, positive intensity values in sample `j`.
-2. If fewer than 20 valid intensities remain, skip this sample (insufficient data for reliable density estimation).
-3. Log₁₀-transform the intensities.
-4. Estimate the probability density via kernel density estimation (`stats::density()`, Gaussian kernel, `n = 512`).
-5. Locate all local minima in the density curve.
-6. Find the **global maximum** (main signal peak) of the density.
-7. Search for a local minimum **to the left** of the main peak (i.e., at lower log-intensity). If multiple valleys exist left of the main peak, take the rightmost one — the valley closest to the signal peak, which represents the noise-signal boundary.
-8. If no valley is found left of the main peak, the distribution is likely unimodal (very clean data or very few noise features). In this case, fall back to:
+3. If `blank_sd_i` is zero or missing, replace it with the median blank SD across features.
+4. Compute a feature-specific background threshold:
 
 ```
-cutoff_log_j = Q(p_fallback)
+cutoff_i = blank_mean_i + k * blank_sd_i
 ```
 
-where `p_fallback` is `percentile_fallback` (default 0.01, i.e., bottom 1% of intensities).
+where `k` is `blank_sd_multiplier` (default `3`).
 
-9. Mark all peaks in sample `j` with `intensity < 10^cutoff_log_j` as `NA`.
+5. For every non-blank sample `j`, mask values below the cutoff:
 
-#### Why log-transform?
+```
+if intensity_i,j < cutoff_i -> NA
+```
 
-LC-MS intensities span 4–6 orders of magnitude. On the linear scale, density estimation is dominated by the highest-intensity features and fails to resolve the noise region. Log transformation compresses the dynamic range and makes the noise mode detectable.
+Blank samples themselves are not masked by this step. They are used as the background reference.
 
-#### When the distribution method can fail
+### Why This Is Not Redundant With XCMS
 
-| Scenario | Behavior |
-|---|---|
-| Highly clean data (few noise features) | Distribution is nearly unimodal → falls back to percentile |
-| Extremely noisy data (no clear signal peak) | Multiple ambiguous valleys → picks the last valley left of the highest peak; may be too conservative |
-| Very few features (<20 valid intensities) | Sample skipped entirely — not enough data for density estimation |
-| All features have similar intensity | No clear bimodal structure → falls back to percentile |
+XCMS `noise` and `prefilter` are applied to raw centroid/ROI detection. They are global or semi-global peak-picking constraints.
 
-In all edge cases, the fallback percentile ensures the method degrades gracefully rather than producing spurious results.
+Blank-informed masking is applied after feature table construction. It asks a different question:
 
----
+> Does this sample's integrated abundance for this feature exceed the observed blank background for the same feature?
+
+That question cannot be answered by a single XCMS intensity threshold such as `noise = 500`.
+
+## Advanced Fallback: Distribution-Based Masking
+
+The `distribution` method remains available only as an advanced fallback when no blank samples are available. It estimates a sample-level cutoff from the log-intensity distribution of all features in each sample.
+
+This method is intentionally not the recommended workflow because it relies on a stronger assumption: that the low-intensity portion of a sample's global feature distribution mostly represents noise. In metabolomics, genuine low-abundance metabolites can also live in that region, especially trace secondary metabolites or group-specific compounds.
+
+Use it only when:
+
+- no blank samples exist;
+- XCMS/paramounter thresholds were already reviewed;
+- the result is manually inspected with missing-value plots before and after masking.
+
+If the distribution is not clearly bimodal, the method falls back to a low percentile cutoff.
 
 ## Parameters
 
 | Parameter | Method | Default | Description |
 |---|---|---|---|
-| `method` | both | `"blank"` | Noise estimation strategy. Auto-falls back to `"distribution"` if < 2 blank samples exist. |
-| `blank_sd_multiplier` | blank | `3` | Multiplier `k` in `μ_blank + k × σ_blank`. Higher = more conservative (fewer peaks marked NA). |
-| `percentile_fallback` | distribution | `0.01` | Percentile used as cutoff when the antimode cannot be found. 0.01 = bottom 1%. Lower = more conservative. |
-| `blank_label` | both | `"Blank"` | The class label that identifies blank samples in `sample_info$class`. |
+| `method` | both | `"blank"` | `"blank"` is recommended. `"distribution"` is an advanced no-blank fallback. |
+| `blank_sd_multiplier` | blank | `3` | Multiplier `k` in `blank_mean + k * blank_sd`. Higher values mask fewer intensities. |
+| `percentile_fallback` | distribution | `0.01` | Percentile used when a distribution cutoff cannot be found. |
+| `blank_label` | blank | `"Blank"` | Class label identifying blank samples in `sample_info$class`. |
 
----
+## Relationship To Other Filters
 
-## Comparison with Existing Filters
-
-| Filter | Level | What it removes | Threshold source |
-|---|---|---|---|
-| **Intensity filter** (this) | Per-peak (cell) | Individual low-intensity measurements → NA | Data-driven: blank noise or per-sample distribution |
-| **Blank ratio filter** | Per-feature (row) | Features where mean(sample)/mean(blank) < cutoff | User-specified ratio (default 3) |
-| **MV filter** | Per-feature (row) | Features with excessive missing values in QC or sample groups | User-specified NA frequency |
-| **RSD filter** | Per-feature (row) | Features with high RSD in QC injections | User-specified RSD % |
-
-The intensity filter is the only one that operates at the *measurement* (cell) level. The other three operate at the *feature* (row) level. Together they form a layered defense: weak signals are first masked, then features that lose too many measurements are discarded.
-
----
+| Filter | Level | Main purpose |
+|---|---|---|
+| XCMS `noise` / `prefilter` / `snthresh` | Raw peak picking | Prevent weak raw signals from becoming peaks |
+| Blank-informed intensity masking | Measurement | Convert blank-like sample intensities to `NA` |
+| Blank ratio filter | Feature | Remove features dominated by blank abundance |
+| MV filter | Feature | Remove features with excessive missingness |
+| RSD filter | Feature | Remove features with unstable QC abundance |
 
 ## Practical Guidance
 
-1. **If you have blank samples**: always use `method = "blank"`. This is the most defensible approach and directly measures the noise floor per feature.
-
-2. **Tuning `blank_sd_multiplier`**: start with 3. If too many genuine low-abundance features are lost (check the message output for % matrix marked NA), reduce to 2. If noise features persist, increase to 4–5.
-
-3. **If you have no blanks**: `method = "distribution"` is a reasonable fallback, but inspect the results. In the Shiny app, compare the MV distribution plots before and after — if a large fraction of features suddenly gain many NAs, the cutoff may be too aggressive (reduce `percentile_fallback`).
-
-4. **Combined with blank ratio filter**: these two filters complement each other. The intensity filter catches per-peak noise within features that might still pass the feature-level blank ratio test (e.g., a feature with adequate mean sample/blank ratio but sporadic low-intensity measurements in individual samples).
+1. Keep intensity masking optional and off by default.
+2. Prefer `method = "blank"` whenever blank samples are available.
+3. Use the blank ratio filter together with blank-informed masking. The ratio filter removes globally blank-dominated features; masking helps expose features with sporadic blank-like measurements.
+4. Do not present distribution-based masking as a core noise-removal step. It is a fallback for no-blank datasets and should be used conservatively.
+5. For suspected solvent or contaminant peaks that are strong and reproducible, blank ratio filtering, m/z/RT exclusion lists, and contaminant annotation are more appropriate than low-intensity masking.

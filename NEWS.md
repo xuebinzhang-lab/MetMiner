@@ -1,5 +1,31 @@
 # MetMiner v2 — Changelog
 
+## v0.1.0.9003 (development)
+
+### 2026-05-03 — Codex-assisted: feature network interpretation and parameter optimization UX
+
+- **Refined noise removal Step 0 as blank-informed intensity masking** rather than a general per-peak intensity cutoff. The method now requires sufficient blank samples and no longer silently falls back to sample-wide intensity distribution filtering when blanks are unavailable.
+- **Kept blank filtering as the recommended post-picking background control** because Tidymass/massprocesser carries blank files through peak picking as samples but does not automatically subtract or remove blank-like biological sample intensities.
+- **Split raw-data parameter optimization into two explicit actions**:
+  - Step 1 estimates `ppmCut` and produces the PPM cutoff plot.
+  - Step 2 optimizes the remaining peak-picking parameters using the reviewed `ppmCut`.
+- **Preserved decimal ppm values** in `paramounter_part1()` and `paramounter_part2()`. XCMS accepts numeric `ppm`, so MetMiner no longer forces recommended ppm values to integers.
+- **Connected the optimization UI `cutoff` controls to the underlying `paramounter_part1()` and `paramounter_part2()` calls**, so changing the UI value now affects the optimization.
+- **Refactored Feature Network into analysis and visualization views**. Analysis focuses on producing network tables; visualization focuses on interactive graph, sub-network inspection, and spectra interpretation.
+- **Added click-driven spectra interpretation for feature sub-networks**:
+  - node selection shows an MS1 lollipop spectrum for all nodes in the selected sub-network;
+  - ISF/neutral-loss relationships are shown as hoverable horizontal arrows between peaks;
+  - clicking an MS1 peak displays the corresponding MS2 lollipop spectrum;
+  - diagnostic fragments are annotated as peak-level hover information;
+  - neutral losses in MS2 are annotated as fragment-pair differences rather than labels on single fragments.
+- **Added raw XCMS chromatogram support** when Tidymass/massprocesser intermediate `xdata` objects are available under `POS/Result/intermediate_data` or `NEG/Result/intermediate_data`.
+- **Removed the System Console module** from the app shell and data-import server because it did not provide useful workflow feedback.
+- **UI polish**: fixed low-contrast title styling in noise removal and missing-value imputation pages.
+
+*Co-authored with Codex (OpenAI GPT-5)*
+
+---
+
 ## v0.1.0.9002 (development)
 
 ### 2026-05-02 — Per-peak intensity noise filter

@@ -33,44 +33,50 @@ mod_data_rm_noise_ui <- function(id) {
 
           tags$hr(),
 
-          # 0. Intensity Filter
-          tags$h6(class="fw-bold text-secondary", "0. Intensity Filter (per-peak)"),
-          checkboxInput(ns("rm_intensity"), "Apply Intensity Filter", value = FALSE),
+          # 0. Blank-informed intensity masking
+          tags$h6(class = "fw-bold", style = "color: #343a40;",
+                  "0. Blank-Informed Intensity Masking"),
+          checkboxInput(ns("rm_intensity"), "Mask low-confidence intensities", value = FALSE),
           conditionalPanel(
             condition = sprintf("input['%s'] == true", ns("rm_intensity")),
             selectInput(ns("intensity_method"), "Method",
-                        choices = c("blank", "distribution"),
+                        choices = c(
+                          "Blank-informed (recommended)" = "blank",
+                          "Distribution fallback (advanced, no blanks)" = "distribution"
+                        ),
                         selected = "blank"),
             conditionalPanel(
               condition = sprintf("input['%s'] == 'blank'", ns("intensity_method")),
               numericInput(ns("blank_sd_mult"), "Blank SD Multiplier", value = 3, min = 1, max = 10, step = 0.5),
-              helpText("Noise cutoff = blank_mean + multiplier * blank_SD, calculated per feature.")
+              helpText("Masks non-blank sample values below blank_mean + multiplier * blank_SD, calculated per feature.")
             ),
             conditionalPanel(
               condition = sprintf("input['%s'] == 'distribution'", ns("intensity_method")),
               numericInput(ns("pct_fallback"), "Percentile Fallback", value = 0.01, min = 0.001, max = 0.1, step = 0.005),
-              helpText("When no clear noise/signal valley is found, use this percentile as the cutoff (0.01 = bottom 1%).")
+              helpText("Advanced fallback for datasets without blanks. Inspect results carefully because low-abundance metabolites can be masked.")
             ),
-            helpText("Sets individual peak intensities below the noise threshold to NA. Downstream MV filter then removes features with too many NAs.")
+            helpText("Optional post-picking masking. This complements XCMS noise/prefilter/snthresh and lets the MV filter remove features with too many masked values.")
           ),
 
           tags$hr(),
 
           # 1. Blank Ratio Filter
-          tags$h6(class="fw-bold text-secondary", "1. Blank Ratio Filter"),
+          tags$h6(class = "fw-bold", style = "color: #343a40;",
+                  "1. Blank Ratio Filter"),
           checkboxInput(ns("rm_blank_ratio"), "Apply Blank Ratio Filter", value = FALSE),
           conditionalPanel(
             condition = sprintf("input['%s'] == true", ns("rm_blank_ratio")),
             selectInput(ns("blank_label"), "Blank Sample Label", choices = NULL),
             selectInput(ns("sample_label"), "Reference Sample Label", choices = NULL),
             numericInput(ns("blank_ratio"), "Ratio Threshold >", value = 3, min = 1, max = 20, step = 0.5),
-            helpText("Features where mean(sample) / mean(blank) < threshold are marked as NA and removed by subsequent MV filter.")
+            helpText("Features where mean(sample) / mean(blank) < threshold are removed as blank-dominated background.")
           ),
 
           tags$hr(),
 
           # 2. MV Thresholds
-          tags$h6(class="fw-bold text-secondary", "2. MV Filter Parameters"),
+          tags$h6(class = "fw-bold", style = "color: #343a40;",
+                  "2. MV Filter Parameters"),
           numericInput(ns("qc_na_freq"), "QC Missing Ratio Threshold <", value = 0.2, min = 0, max = 1, step = 0.05),
           numericInput(ns("s_na_freq"), "Group Missing Ratio Threshold <", value = 0.5, min = 0, max = 1, step = 0.05),
 
@@ -80,7 +86,8 @@ mod_data_rm_noise_ui <- function(id) {
           tags$hr(),
 
           # 3. RSD Setting
-          tags$h6(class="fw-bold text-secondary", "3. RSD Filter (QC)"),
+          tags$h6(class = "fw-bold", style = "color: #343a40;",
+                  "3. RSD Filter (QC)"),
           checkboxInput(ns("rm_noise_rsd"), "Apply RSD Filter", value = TRUE),
           conditionalPanel(
             condition = sprintf("input['%s'] == true", ns("rm_noise_rsd")),
@@ -274,7 +281,7 @@ mod_data_rm_noise_server <- function(id, global_data, prj_init) {
                                       do_intensity = FALSE, intensity_method = "blank", blank_sd_mult = 3, pct_fallback = 0.01) {
       if (is.null(object)) return(NULL)
 
-      # Step 0: Intensity Filter (per-peak)
+      # Step 0: Optional blank-informed intensity masking.
       if (do_intensity) {
         object <- find_noise_intensity(
           object               = object,

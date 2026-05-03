@@ -1,0 +1,7 @@
+^\.DS_Store$
+^inst/\.DS_Store$
+^inst/app/\.DS_Store$
+^\.claude$
+^\.git$
+^\.\.Rcheck$
+^MetMiner\.Rproj$

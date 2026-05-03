@@ -193,7 +193,7 @@ paramounter_part1 <- function(directory, massSDrange = 2, smooth = 0, cutoff = 0
 
   idx_cut <- round(nrow(ppm2D) * cutoff)
   dashline <- if (idx_cut > 0) ppm2D$ppm[idx_cut] else 0
-  dashline <- ceiling(dashline)
+  dashline <- round(dashline, 2)
 
   p <- ggplot(ppm2D, aes(x = mz, y = ppm)) +
     geom_point(alpha=0.5, size=0.8, color = "#2c3e50") +
@@ -317,7 +317,7 @@ paramounter_part2 <- function(directory, massSDrange = 2, smooth = 0, cutoff = 0
   res_table <- data.frame(
     para = c("ppm", "p_min", "p_max", "snthresh", "mzdiff", "integrate", "pre_left", "pre_right", "noise", "bw", "min_fraction"),
     desc = c("ppm", "peakwidth min", "peakwidth max", "signal/noise", "mzdiff", "integrate", "prefilter peaks", "prefilter int", "noise", "bw", "min_fraction"),
-    Value = c(round(ppmCut), p_min, p_max, sn_thresh, -0.01, 1, 3, noise_val, noise_val, 5, 0.5),
+    Value = c(round(ppmCut, 2), p_min, p_max, sn_thresh, -0.01, 1, 3, noise_val, noise_val, 5, 0.5),
     stringsAsFactors = FALSE
   )
 

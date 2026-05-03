@@ -5,21 +5,7 @@
 #' @import shiny
 #' @noRd
 app_server <- function(input, output, session) {
-  # --- 1. Global Setup & Logger ---
-
-  # Global Log Storage (List of lists: time, type, msg)
-  global_log <- reactiveVal(list(
-    list(time = format(Sys.time(), "%H:%M:%S"), type = "info", msg = "MetMiner System initialized.")
-  ))
-
-  # Helper to add log (To be passed to modules)
-  logger <- function(msg, type = "info") {
-    current_logs <- global_log()
-    new_entry <- list(time = format(Sys.time(), "%H:%M:%S"), type = type, msg = msg)
-    global_log(c(current_logs, list(new_entry)))
-  }
-
-  # --- 2. Global Data Containers ---
+  # --- 1. Global Data Containers ---
 
   # Project Initialization State (Paths, Resume info)
   prj_init <- reactiveValues(
@@ -45,7 +31,7 @@ app_server <- function(input, output, session) {
   )
 
 
-  # --- 3. Sync Logic: Project Init -> Global Data ---
+  # --- 2. Sync Logic: Project Init -> Global Data ---
   # If user resumes a task and loads objects in prj_init, sync them to global_data
   observe({
     req(prj_init$wd)
@@ -54,7 +40,7 @@ app_server <- function(input, output, session) {
     if(!is.null(prj_init$object_negative.init)) global_data$object_neg_raw <- prj_init$object_negative.init
   })
 
-  # --- 4. Modules Calling ---
+  # --- 3. Modules Calling ---
 
   # -> Homepage
   mod_homepage_server("home_1")
@@ -64,12 +50,9 @@ app_server <- function(input, output, session) {
 
   # -> Unified Data Import
   # Now accepts global_data to write directly into it
-  mod_data_import_server("data_import_1", prj_init = prj_init, global_data = global_data, logger = logger)
+  mod_data_import_server("data_import_1", prj_init = prj_init, global_data = global_data)
 
-  # -> Console Monitor (Global Widget)
-  mod_console_monitor_server("console_1", global_log = global_log)
-
-  # --- 5. Analysis Pipeline ---
+  # --- 4. Analysis Pipeline ---
 
   downloads <- reactiveValues(data = NULL)
 

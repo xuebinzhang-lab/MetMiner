@@ -149,7 +149,9 @@ mod_data_import_ui <- function(id) {
                         )
                       ),
                       tags$div(class="mt-2"),
-                      actionButton(ns('run_opt_full'), 'Start Optimization', icon = icon("play"), class = "btn-primary w-100"),
+                      actionButton(ns("run_opt_step1"), "Run Step 1: Estimate PPM", icon = icon("chart-line"), class = "btn-primary w-100"),
+                      tags$div(class="mt-2"),
+                      actionButton(ns("run_opt_step2"), "Run Step 2: Optimize Parameters", icon = icon("sliders"), class = "btn-outline-primary w-100"),
                       tags$div(class="mt-2"),
                       actionButton(ns("apply_opt_params"), "Apply Parameters", icon = icon("check"), class = "btn-success w-100")
                     ),
@@ -291,7 +293,10 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
       opt_results = list(pos = NULL, neg = NULL),
       combined_plot = NULL,
       final_params = NULL,
-      opt_table = NULL
+      opt_table = NULL,
+      ppm_cut = NULL,
+      opt_step1_done = FALSE,
+      opt_step2_done = FALSE
     )
 
     shinyjs::hide("opt_ui_wrapper")
@@ -368,77 +373,148 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
       })
     })
 
+    get_polarity_dir <- function(root, polarity) {
+      polarity_dir <- file.path(root, polarity)
+      qc_dir <- file.path(polarity_dir, "QC")
+      if(dir.exists(qc_dir)) qc_dir else file.path(polarity_dir, "Subject")
+    }
+
+    get_ppm_cut <- function(result) {
+      if(is.null(result) || is.null(result$ppmCut)) return(NA_real_)
+      ppm <- suppressWarnings(as.numeric(result$ppmCut))
+      if(length(ppm) == 0 || !is.finite(ppm[1])) return(NA_real_)
+      ppm[1]
+    }
+
+    combine_opt_tables <- function(tbl_pos, tbl_neg) {
+      if(!is.null(tbl_pos) && !is.null(tbl_neg)) {
+        dplyr::left_join(tbl_pos, tbl_neg, by = c("para", "desc"))
+      } else if(!is.null(tbl_pos)) {
+        tbl_pos
+      } else if(!is.null(tbl_neg)) {
+        tbl_neg
+      } else {
+        NULL
+      }
+    }
+
     # 1.2 Optimization Logic
-    observeEvent(input$run_opt_full, {
+    observeEvent(input$run_opt_step1, {
       req(state$raw_ms1_dir)
       struct <- check_ms1_structure(state$raw_ms1_dir)
 
-      log_msg("Starting Parameter Optimization...", "info")
+      log_msg("Starting Parameter Optimization Step 1: PPM estimation...", "info")
 
       p1_sd <- as.numeric(input$opt_sd_1)
       p1_sm <- as.numeric(input$opt_smooth_1)
+      p1_cutoff <- as.numeric(input$opt_cutoff_1)
       p1_th <- as.numeric(input$opt_thread_1)
       p1_fn <- input$opt_filenum_1
-      p2_sd <- as.numeric(input$opt_sd_2)
-      p2_sm <- as.numeric(input$opt_smooth_2)
-      p2_th <- as.numeric(input$opt_thread_2)
-      p2_fn <- input$opt_filenum_2
 
-      show_progress_modal("Optimization", "Initializing...", 0)
+      show_progress_modal("Optimization Step 1", "Estimating ppmCut...", 0)
 
       tryCatch({
-        update_progress_modal(10, "Step 1: Calculating PPM...")
+        state$opt_results <- list(pos = NULL, neg = NULL)
+        state$opt_table <- NULL
+        state$ppm_cut <- NULL
+        state$opt_step1_done <- FALSE
+        state$opt_step2_done <- FALSE
 
         if(struct$pos) {
-          dir_pos <- file.path(state$raw_ms1_dir, "POS", if(dir.exists(file.path(state$raw_ms1_dir, "POS", "QC"))) "QC" else "Subject")
-          state$opt_results$pos <- paramounter_part1(directory = dir_pos, massSDrange = p1_sd, smooth = p1_sm, filenum = p1_fn, thread = p1_th)
+          update_progress_modal(25, "Estimating POS ppmCut...")
+          dir_pos <- get_polarity_dir(state$raw_ms1_dir, "POS")
+          state$opt_results$pos <- paramounter_part1(directory = dir_pos, massSDrange = p1_sd, smooth = p1_sm, cutoff = p1_cutoff, filenum = p1_fn, thread = p1_th)
         }
         if(struct$neg) {
-          dir_neg <- file.path(state$raw_ms1_dir, "NEG", if(dir.exists(file.path(state$raw_ms1_dir, "NEG", "QC"))) "QC" else "Subject")
-          state$opt_results$neg <- paramounter_part1(directory = dir_neg, massSDrange = p1_sd, smooth = p1_sm, filenum = p1_fn, thread = p1_th)
+          update_progress_modal(65, "Estimating NEG ppmCut...")
+          dir_neg <- get_polarity_dir(state$raw_ms1_dir, "NEG")
+          state$opt_results$neg <- paramounter_part1(directory = dir_neg, massSDrange = p1_sd, smooth = p1_sm, cutoff = p1_cutoff, filenum = p1_fn, thread = p1_th)
         }
 
-        final_ppm <- NULL
-        if(!is.null(state$opt_results$pos$ppmCut)) final_ppm <- state$opt_results$pos$ppmCut
-        else if(!is.null(state$opt_results$neg$ppmCut)) final_ppm <- state$opt_results$neg$ppmCut
+        ppm_candidates <- c(
+          POS = get_ppm_cut(state$opt_results$pos),
+          NEG = get_ppm_cut(state$opt_results$neg)
+        )
+        ppm_candidates <- ppm_candidates[is.finite(ppm_candidates)]
 
-        if(!is.null(final_ppm)) {
+        if(length(ppm_candidates) > 0) {
+          final_ppm <- max(ppm_candidates, na.rm = TRUE)
+          state$ppm_cut <- final_ppm
           updateTextInput(session, "opt_ppm_2", value = round(final_ppm, 2))
         }
 
-        update_progress_modal(50, "Step 2: Finalizing Parameters...")
+        state$opt_step1_done <- TRUE
+        update_progress_modal(100, "Step 1 complete.")
+        Sys.sleep(0.5)
+        close_progress_modal()
 
-        tbl_pos <- NULL; tbl_neg <- NULL
-        ppm_use <- if(!is.null(final_ppm)) final_ppm else as.numeric(input$opt_ppm_2)
+        msg <- if(length(ppm_candidates) > 0) {
+          paste0("Step 1 finished. Suggested ppmCut = ", round(state$ppm_cut, 2), ". Review the PPM plot, adjust ppmCut if needed, then run Step 2.")
+        } else {
+          "Step 1 finished, but no valid ppmCut was returned. Please inspect the plot/log and enter ppmCut manually before Step 2."
+        }
+        shinyalert::shinyalert("Step 1 Finished", msg, type = "success")
+
+      }, error = function(e) {
+        close_progress_modal()
+        log_msg(paste("Optimization Step 1 Error:", e$message), "error")
+        shinyalert::shinyalert("Error", paste("Step 1 failed:", e$message), type = "error")
+      })
+    })
+
+    observeEvent(input$run_opt_step2, {
+      req(state$raw_ms1_dir)
+      struct <- check_ms1_structure(state$raw_ms1_dir)
+
+      log_msg("Starting Parameter Optimization Step 2: final parameter search...", "info")
+
+      p2_sd <- as.numeric(input$opt_sd_2)
+      p2_sm <- as.numeric(input$opt_smooth_2)
+      p2_cutoff <- as.numeric(input$opt_cutoff_2)
+      p2_th <- as.numeric(input$opt_thread_2)
+      p2_fn <- input$opt_filenum_2
+      ppm_use <- suppressWarnings(as.numeric(input$opt_ppm_2))
+
+      if(length(ppm_use) == 0 || !is.finite(ppm_use[1])) {
+        shinyalert::shinyalert("Missing ppmCut", "Run Step 1 first, or enter a valid ppmCut manually before Step 2.", type = "warning")
+        return(NULL)
+      }
+      ppm_use <- ppm_use[1]
+
+      show_progress_modal("Optimization Step 2", "Optimizing peak-picking parameters...", 0)
+
+      tryCatch({
+        tbl_pos <- NULL
+        tbl_neg <- NULL
 
         if(struct$pos) {
-          dir_pos <- file.path(state$raw_ms1_dir, "POS", if(dir.exists(file.path(state$raw_ms1_dir, "POS", "QC"))) "QC" else "Subject")
-          tbl_pos <- paramounter_part2(directory = dir_pos, massSDrange = p2_sd, smooth = p2_sm, ppmCut = ppm_use, filenum = p2_fn, thread = p2_th)
+          update_progress_modal(35, "Optimizing POS parameters...")
+          dir_pos <- get_polarity_dir(state$raw_ms1_dir, "POS")
+          tbl_pos <- paramounter_part2(directory = dir_pos, massSDrange = p2_sd, smooth = p2_sm, cutoff = p2_cutoff, ppmCut = ppm_use, filenum = p2_fn, thread = p2_th)
           if(!is.null(tbl_pos)) tbl_pos <- tbl_pos %>% dplyr::rename(Positive = Value)
         }
         if(struct$neg) {
-          dir_neg <- file.path(state$raw_ms1_dir, "NEG", if(dir.exists(file.path(state$raw_ms1_dir, "NEG", "QC"))) "QC" else "Subject")
-          tbl_neg <- paramounter_part2(directory = dir_neg, massSDrange = p2_sd, smooth = p2_sm, ppmCut = ppm_use, filenum = p2_fn, thread = p2_th)
+          update_progress_modal(70, "Optimizing NEG parameters...")
+          dir_neg <- get_polarity_dir(state$raw_ms1_dir, "NEG")
+          tbl_neg <- paramounter_part2(directory = dir_neg, massSDrange = p2_sd, smooth = p2_sm, cutoff = p2_cutoff, ppmCut = ppm_use, filenum = p2_fn, thread = p2_th)
           if(!is.null(tbl_neg)) tbl_neg <- tbl_neg %>% dplyr::rename(Negative = Value)
         }
 
-        if(!is.null(tbl_pos) && !is.null(tbl_neg)) {
-          state$opt_table <- dplyr::left_join(tbl_pos, tbl_neg, by = c("para", "desc"))
-        } else if(!is.null(tbl_pos)) {
-          state$opt_table <- tbl_pos
-        } else if(!is.null(tbl_neg)) {
-          state$opt_table <- tbl_neg
+        state$opt_table <- combine_opt_tables(tbl_pos, tbl_neg)
+        if(is.null(state$opt_table)) {
+          stop("No optimized parameter table was returned.")
         }
+        state$opt_step2_done <- TRUE
 
         update_progress_modal(100, "Done!")
         Sys.sleep(0.5)
         close_progress_modal()
-        shinyalert::shinyalert("Optimization Finished", "Please check the 'Optimized parameters' tab and click 'Apply Parameters' to use them.", type = "success")
+        shinyalert::shinyalert("Step 2 Finished", "Optimized parameters are ready. Review the table and click 'Apply Parameters' to use them.", type = "success")
 
       }, error = function(e) {
         close_progress_modal()
-        log_msg(paste("Optimization Error:", e$message), "error")
-        shinyalert::shinyalert("Error", paste("Optimization failed:", e$message), type = "error")
+        log_msg(paste("Optimization Step 2 Error:", e$message), "error")
+        shinyalert::shinyalert("Error", paste("Step 2 failed:", e$message), type = "error")
       })
     })
 

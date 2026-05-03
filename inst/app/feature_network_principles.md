@@ -107,6 +107,29 @@ Cross-polarity merged networks are used for redundancy inspection and relationsh
 
 ---
 
+## Interactive Interpretation View
+
+The Shiny module separates network construction from interpretation:
+
+- **Analysis view**: runs the relationship search and returns edge/node tables for isotope, adduct, ISF, and cross-polarity relationships.
+- **Visualization view**: renders selected networks and sub-networks for manual interpretation.
+
+When a user selects a node in the network, MetMiner identifies the corresponding connected component (sub-network). The MS1 spectrum panel then shows all features in that sub-network as a lollipop plot:
+
+- x-axis: feature m/z;
+- y-axis: feature intensity, usually mean abundance or the available representative intensity;
+- hover text: feature ID, m/z, RT, mean intensity, and relationship metadata;
+- isotope labels are intentionally de-emphasized to reduce clutter;
+- ISF and neutral-loss relationships are shown as horizontal arrows between the two related MS1 peaks, with relationship details in hover text.
+
+If an MS1 peak is selected and MS2 data are available, the MS2 panel displays the associated spectrum as a lollipop plot. Diagnostic fragment ions are annotated on matching peaks. Neutral losses are annotated as differences between fragment pairs because a neutral loss is a relationship between two fragment ions, not a property of a single fragment peak.
+
+The MS2 display focuses on the top intensity fragments to keep annotation readable. This is intended as an interpretation aid, not an automatic structure assignment.
+
+If raw Tidymass/massprocesser intermediate data are available, MetMiner can also load XCMS `xdata` objects from `POS/Result/intermediate_data` or `NEG/Result/intermediate_data` and draw extracted chromatograms for the selected feature.
+
+---
+
 ## Plant-Specific Dictionaries
 
 Two built-in dictionaries support plant metabolomics:
@@ -122,6 +145,7 @@ Both can be overridden with custom tables via `adduct_table` and `neutral_loss_t
 
 - **Storage**: The network edge table is stored in `object@other_files$feature_network`, keeping compatibility with the `massdataset` S4 class without modifying its slot definition.
 - **MS2 timing**: MS2 ZIP upload and `mutate_ms2()` matching are performed in the Feature Network workflow after normalization. This avoids matching spectra to raw features that may later be removed during cleaning or normalization.
+- **Raw chromatograms**: EIC plots are generated only when raw XCMS/Tidymass intermediate `xdata` objects are available. They are optional visual evidence and are not required for edge detection.
 - **MS2 audit helper**: `audit_ms2_assignment()` exposes the stricter post-`mutate_ms2()` assignment audit as a standalone helper.
 - **Cross-polarity merge helper**: `merge_polarity_feature_networks()` builds the final positive/negative merged network with prefixed feature IDs.
 - **Graph conversion**: `as_feature_igraph()` converts the edge table to an igraph directed graph, with vertex attributes from `variable_info`.

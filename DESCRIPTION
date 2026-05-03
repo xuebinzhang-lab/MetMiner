@@ -1,6 +1,6 @@
 Package: MetMiner
-Title: An Amazing Shiny App
-Version: 0.1.0.9002
+Title: Robust Plant Metabolomics and ISF Deconvolution
+Version: 0.1.0.9003
 Authors@R: 
     c(person(given = "Xiao",
              family = "Wang",
@@ -9,8 +9,13 @@ Authors@R:
       person(given = "Codex",
              role = "ctb",
              comment = "OpenAI coding agent"))
+Author: Xiao Wang [aut, cre],
+    Codex [ctb]
+Maintainer: Xiao Wang <shawnwang2016@126.com>
 Description: An Agentic, AI-Driven Platform for Robust Plant Metabolomics and ISF Deconvolution.
 License: MIT + file LICENSE
+Depends:
+    R (>= 4.1.0)
 Imports: 
     bsicons,
     bslib,
@@ -40,7 +45,8 @@ Imports:
     stringr,
     tibble,
     tidyr,
-    visNetwork
+    visNetwork,
+    xcms
 Remotes:
     tidymass/masscleaner,
     tidymass/massdataset,

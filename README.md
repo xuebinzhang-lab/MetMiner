@@ -28,6 +28,24 @@ Complex plant secondary metabolites (e.g., flavonoids, glycosides) frequently un
 
 ---
 
+## Current GUI Workflows
+
+### Raw Data Import and Parameter Optimization
+MetMiner imports raw MS1 data through `massprocesser::process_data()`, using the Tidymass/XCMS centWave workflow for peak picking. The raw-data parameter optimizer is intentionally split into two reviewable steps:
+
+1. **Step 1: Estimate PPM** — estimates a data-driven `ppmCut` from selected raw files and displays the PPM cutoff plot.
+2. **Step 2: Optimize Parameters** — optimizes remaining peak-picking parameters using the reviewed `ppmCut`.
+
+`ppm` values are treated as numeric tolerances, not forced integers, matching XCMS behavior.
+
+### Blank-Informed Noise Control
+After peak picking, MetMiner supports blank-informed intensity masking. Blank samples estimate feature-specific background, and non-blank sample intensities that do not exceed this background are converted to missing values before downstream MV/RSD filters. This step is complementary to XCMS `noise`, `prefilter`, and `snthresh` thresholds rather than a replacement for them.
+
+### Feature Network Analysis and Visualization
+The Feature Network module separates table-oriented analysis from interactive interpretation. Users can generate isotope, adduct, ISF, and cross-polarity relationship tables, then inspect sub-networks in an interactive graph. Selecting a node displays an MS1 lollipop spectrum for the whole sub-network, optional raw chromatograms from Tidymass/XCMS intermediate `xdata`, and an MS2 lollipop spectrum with diagnostic fragment and neutral-loss annotations.
+
+---
+
 ## 🧠 System Architecture & Mind Map
 
 ```mermaid
