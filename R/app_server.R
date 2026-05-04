@@ -9,10 +9,12 @@ app_server <- function(input, output, session) {
 
   # Project Initialization State (Paths, Resume info)
   prj_init <- reactiveValues(
+    job_id = NULL,
     wd = NULL,
     sample_info = NULL,
     object_positive.init = NULL, # From resuming
     object_negative.init = NULL, # From resuming
+    loaded_objects = list(),
     mass_dataset_dir = NULL,
     data_export_dir = NULL
   )
@@ -35,9 +37,14 @@ app_server <- function(input, output, session) {
   # If user resumes a task and loads objects in prj_init, sync them to global_data
   observe({
     req(prj_init$wd)
+    if (length(prj_init$loaded_objects) > 0) {
+      for (nm in names(prj_init$loaded_objects)) {
+        global_data[[nm]] <- prj_init$loaded_objects[[nm]]
+      }
+    }
     # If raw objects were loaded during init (Resuming), put them into raw slots
-    if(!is.null(prj_init$object_positive.init)) global_data$object_pos_raw <- prj_init$object_positive.init
-    if(!is.null(prj_init$object_negative.init)) global_data$object_neg_raw <- prj_init$object_negative.init
+    if(!is.null(prj_init$object_positive.init) && is.null(global_data$object_pos_raw)) global_data$object_pos_raw <- prj_init$object_positive.init
+    if(!is.null(prj_init$object_negative.init) && is.null(global_data$object_neg_raw)) global_data$object_neg_raw <- prj_init$object_negative.init
   })
 
   # --- 3. Modules Calling ---
@@ -75,4 +82,10 @@ app_server <- function(input, output, session) {
   mod_data_norm_server("data_norm_1",global_data = global_data, prj_init = prj_init)
   # feature relationship network
   mod_feature_network_server("feature_network_1", global_data = global_data, prj_init = prj_init)
+  # metabolite annotation
+  mod_annotation_server("annotation_1", global_data = global_data, prj_init = prj_init)
+  # feature-network assisted annotation validation and visualization
+  mod_feature_annotation_server("feature_annotation_1", global_data = global_data, prj_init = prj_init)
+  # annotation filtering and redundancy removal
+  mod_annotation_filter_server("annotation_filter_1", global_data = global_data, prj_init = prj_init)
 }

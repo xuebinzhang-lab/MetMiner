@@ -81,8 +81,9 @@ app_ui <- function(request) {
 
       bslib::nav_menu(
         title = "Analysis",
-        bslib::nav_panel("Annotation", div(class="p-4", "Placeholder")),
-        bslib::nav_panel("Filter Annotations", div(class="p-4", "Placeholder")),
+        bslib::nav_panel("Annotation", mod_annotation_ui("annotation_1")),
+        bslib::nav_panel("Network Annotation", mod_feature_annotation_ui("feature_annotation_1")),
+        bslib::nav_panel("Filter Annotations", mod_annotation_filter_ui("annotation_filter_1")),
         bslib::nav_panel("Merge Data", div(class="p-4", "Placeholder")),
         bslib::nav_panel("Classification", div(class="p-4", "Placeholder")),
         bslib::nav_panel("Differential Analysis", div(class="p-4", "Placeholder")),

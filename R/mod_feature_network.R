@@ -49,7 +49,7 @@ mod_feature_network_ui <- function(id) {
               ),
               numericInput(ns("ppm"), "Mass Tolerance (ppm)", value = 10, min = 1, step = 1),
               numericInput(ns("rt_tolerance"), "RT Window (sec)", value = 1, min = 0.1, step = 0.1),
-              sliderInput(ns("cor_cutoff"), "Abundance Correlation", min = 0, max = 1, value = 0.7, step = 0.05),
+              sliderInput(ns("cor_cutoff"), "Correlation Full-score Reference", min = 0.05, max = 1, value = 0.7, step = 0.05),
               numericInput(ns("max_charge"), "Max Isotope Charge", value = 2, min = 1, max = 4, step = 1),
               numericInput(ns("max_nl_charge"), "Max Neutral Loss Charge", value = 1, min = 1, max = 3, step = 1)
             ),
@@ -121,6 +121,9 @@ mod_feature_network_ui <- function(id) {
                 bslib::card_header("Network Tables", class = "bg-light"),
                 bslib::navset_card_tab(
                   bslib::nav_panel("Edges", DT::dataTableOutput(ns("tbl_edges"))),
+                  bslib::nav_panel("Feature Roles", DT::dataTableOutput(ns("tbl_feature_roles"))),
+                  bslib::nav_panel("Recurrent Ion Groups", DT::dataTableOutput(ns("tbl_recurrent_ion_groups"))),
+                  bslib::nav_panel("Recurrent Ion Edges", DT::dataTableOutput(ns("tbl_recurrent_ion_edges"))),
                   bslib::nav_panel("Pseudo Area", DT::dataTableOutput(ns("tbl_pseudo_area"))),
                   bslib::nav_panel("Compound Info", DT::dataTableOutput(ns("tbl_compound_info"))),
                   bslib::nav_panel("Feature Mapping", DT::dataTableOutput(ns("tbl_feature_mapping")))
@@ -138,7 +141,7 @@ mod_feature_network_ui <- function(id) {
                   selectInput(
                     ns("network_scope"),
                     "Network View",
-                    choices = c("Single ion mode" = "single", "Final merged polarity network" = "merged"),
+                    choices = c("Single ion mode" = "single", "Recurrent ion network" = "recurrent", "Final merged polarity network" = "merged"),
                     selected = "single"
                   )
                 ),
@@ -389,13 +392,31 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
       net[net$confidence >= input$min_confidence, , drop = FALSE]
     })
 
+    selected_recurrent_ion_network <- reactive({
+      obj <- selected_object()
+      if (is.null(obj)) {
+        return(empty_recurrent_ion_network())
+      }
+      recurrent <- extract_recurrent_ion_network(obj)
+      if (nrow(recurrent$groups) > 0) {
+        return(recurrent)
+      }
+      build_recurrent_ion_network(
+        variable_info = massdataset::extract_variable_info(obj),
+        expression_data = massdataset::extract_expression_data(obj),
+        feature_roles = extract_feature_network_roles(obj),
+        mz_ppm = input$ppm,
+        min_rt_gap = input$rt_tolerance
+      )
+    })
+
     output$method_summary <- renderText({
       paste0(
         "Detect: ", paste(input$detect_types, collapse = ", "),
         "\nIon mode: ", input$ion_mode,
         "\nMass tolerance: ", input$ppm, " ppm",
         "\nRT window: ", input$rt_tolerance, " sec",
-        "\nCorrelation cutoff: ", input$cor_cutoff,
+        "\nCorrelation full-score reference: ", input$cor_cutoff, " (scoring, not hard filtering)",
         "\nNeutral loss charge: z <= ", input$max_nl_charge,
         "\nMS2 audit: ", if (isTRUE(input$use_ms2)) {
           paste0(input$ms2_mz_tol_ppm, " ppm, ", input$ms2_rt_tol, " sec")
@@ -464,18 +485,33 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
     }, ignoreInit = TRUE)
 
     observe({
-      net <- selected_network()
       choices <- c("All networks" = "all")
-      if (nrow(net) > 0 && requireNamespace("igraph", quietly = TRUE)) {
-        comp <- get_network_component_membership(net)
-        involved_ids <- unique(c(net$from, net$to))
-        comp_sizes <- sort(table(comp[involved_ids]), decreasing = TRUE)
-        comp_sizes <- utils::head(comp_sizes, input$max_subnetworks)
-        comp_choices <- stats::setNames(
-          names(comp_sizes),
-          paste0("Sub-network ", names(comp_sizes), " (", as.integer(comp_sizes), " features)")
-        )
-        choices <- c(choices, comp_choices)
+      if (identical(input$network_scope, "recurrent")) {
+        recurrent <- selected_recurrent_ion_network()
+        groups <- recurrent$groups
+        if (nrow(groups) > 0) {
+          groups <- groups[order(groups$n_instances, groups$parent_resolved_n, decreasing = TRUE), , drop = FALSE]
+          groups <- utils::head(groups, input$max_subnetworks)
+          group_choices <- stats::setNames(
+            groups$ion_group_id,
+            sprintf("m/z %.5f (%d RT instances; %d resolved)",
+                    groups$center_mz, groups$n_instances, groups$parent_resolved_n)
+          )
+          choices <- c(choices, group_choices)
+        }
+      } else {
+        net <- selected_network()
+        if (nrow(net) > 0 && requireNamespace("igraph", quietly = TRUE)) {
+          comp <- get_network_component_membership(net)
+          involved_ids <- unique(c(net$from, net$to))
+          comp_sizes <- sort(table(comp[involved_ids]), decreasing = TRUE)
+          comp_sizes <- utils::head(comp_sizes, input$max_subnetworks)
+          comp_choices <- stats::setNames(
+            names(comp_sizes),
+            paste0("Sub-network ", names(comp_sizes), " (", as.integer(comp_sizes), " features)")
+          )
+          choices <- c(choices, comp_choices)
+        }
       }
       updateSelectInput(session, "sub_network", choices = choices, selected = "all")
     })
@@ -612,10 +648,17 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
       }
 
       compound_count <- if (!is.null(pseudo)) nrow(pseudo$expression_data) else 0
+      roles <- extract_feature_network_roles(obj)
+      role_counts <- if (nrow(roles) > 0) {
+        paste(names(table(roles$network_role)), as.integer(table(roles$network_role)), sep = "=", collapse = ", ")
+      } else {
+        "none"
+      }
       paste0(
         "Features: ", nrow(massdataset::extract_variable_info(obj)),
         "\nEdges: ", nrow(net),
         "\nEdge types: ", type_counts,
+        "\nFeature roles: ", role_counts,
         "\nEmpirical compounds: ", compound_count
       )
     }
@@ -642,11 +685,11 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
     render_state <- reactiveVal("idle")
 
     build_network_display_data <- function() {
-      net <- selected_network()
-      if (nrow(net) == 0) {
-        return(NULL)
-      }
       if (identical(input$network_scope, "merged")) {
+        net <- selected_network()
+        if (nrow(net) == 0) {
+          return(NULL)
+        }
         return(make_merged_network_display_data(
           positive_object = global_data$object_pos_network,
           negative_object = global_data$object_neg_network,
@@ -658,6 +701,17 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
 
       obj <- selected_object()
       if (is.null(obj)) {
+        return(NULL)
+      }
+      if (identical(input$network_scope, "recurrent")) {
+        return(make_recurrent_ion_display_data(
+          recurrent = selected_recurrent_ion_network(),
+          ion_group_id = input$sub_network,
+          max_edges = input$max_render_edges
+        ))
+      }
+      net <- selected_network()
+      if (nrow(net) == 0) {
         return(NULL)
       }
       make_network_display_data(object = obj, network = net,
@@ -685,12 +739,20 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
     output$network_title <- renderText({
       mode_label <- if (identical(input$network_scope, "merged")) {
         "Final Merged Polarity Network"
+      } else if (identical(input$network_scope, "recurrent")) {
+        paste("Recurrent Ion Network", if (identical(input$view_mode, "positive")) "(Positive)" else "(Negative)")
       } else if (identical(input$view_mode, "positive")) {
         "Positive Mode"
       } else {
         "Negative Mode"
       }
-      sub_label <- if (identical(input$sub_network, "all")) "All networks" else paste("Sub-network", input$sub_network)
+      sub_label <- if (identical(input$sub_network, "all")) {
+        "All networks"
+      } else if (identical(input$network_scope, "recurrent")) {
+        paste("Ion group", input$sub_network)
+      } else {
+        paste("Sub-network", input$sub_network)
+      }
       display <- rendered_network()
       render_label <- if (!is.null(display) && isTRUE(display$truncated)) {
         paste0(" - showing top ", nrow(display$edges), " edges by confidence")
@@ -754,6 +816,11 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
         visNetwork::visGroups(groupname = "Negative feature", color = "#7a5195") |>
         visNetwork::visGroups(groupname = "Cross-polarity feature", color = "#4d4d4d") |>
         visNetwork::visGroups(groupname = "Feature", color = "#7f8c8d") |>
+        visNetwork::visGroups(groupname = "Recurrent ion", color = "#0f766e", shape = "box") |>
+        visNetwork::visGroups(groupname = "Resolved recurrent instance", color = "#22c55e") |>
+        visNetwork::visGroups(groupname = "Unresolved recurrent instance", color = "#f59e0b") |>
+        visNetwork::visGroups(groupname = "Resolved parent", color = "#2563eb", shape = "diamond") |>
+        visNetwork::visGroups(groupname = "Neutral loss source", color = "#64748b", shape = "box") |>
         visNetwork::visEdges(arrows = "to", smooth = FALSE, font = list(align = "middle", size = 12)) |>
         visNetwork::visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) |>
         visNetwork::visInteraction(dragNodes = TRUE, dragView = TRUE, hover = TRUE, tooltipDelay = 80) |>
@@ -783,7 +850,12 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
         "Positive feature" = "#2c7fb8",
         "Negative feature" = "#7a5195",
         "Cross-polarity feature" = "#4d4d4d",
-        "Feature" = "#7f8c8d"
+        "Feature" = "#7f8c8d",
+        "Recurrent ion" = "#0f766e",
+        "Resolved recurrent instance" = "#22c55e",
+        "Unresolved recurrent instance" = "#f59e0b",
+        "Resolved parent" = "#2563eb",
+        "Neutral loss source" = "#64748b"
       )
       plot(
         g,
@@ -801,6 +873,33 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
     output$tbl_edges <- DT::renderDataTable({
       net <- selected_network()
       DT::datatable(net, options = list(scrollX = TRUE, pageLength = 10))
+    })
+
+    output$tbl_feature_roles <- DT::renderDataTable({
+      validate(need(!identical(input$network_scope, "merged"),
+                    "Feature-role tables are polarity-specific. Switch to a single ion mode view."))
+      obj <- selected_object()
+      req(obj)
+      roles <- extract_feature_network_roles(obj)
+      DT::datatable(roles, options = list(scrollX = TRUE, pageLength = 10))
+    })
+
+    output$tbl_recurrent_ion_groups <- DT::renderDataTable({
+      validate(need(!identical(input$network_scope, "merged"),
+                    "Recurrent-ion tables are polarity-specific. Switch to a single ion mode view."))
+      obj <- selected_object()
+      req(obj)
+      recurrent <- selected_recurrent_ion_network()
+      DT::datatable(recurrent$groups, options = list(scrollX = TRUE, pageLength = 10))
+    })
+
+    output$tbl_recurrent_ion_edges <- DT::renderDataTable({
+      validate(need(!identical(input$network_scope, "merged"),
+                    "Recurrent-ion tables are polarity-specific. Switch to a single ion mode view."))
+      obj <- selected_object()
+      req(obj)
+      recurrent <- selected_recurrent_ion_network()
+      DT::datatable(recurrent$edges, options = list(scrollX = TRUE, pageLength = 10))
     })
 
     output$tbl_pseudo_area <- DT::renderDataTable({
@@ -841,11 +940,16 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
 
     observeEvent(input$node_selected, {
       node_id <- input$node_selected
-      selected_ms2_feature(if (is.null(node_id) || !nzchar(node_id)) NULL else node_id)
+      selected_ms2_feature(node_id_to_feature_id(node_id))
     }, ignoreInit = TRUE)
 
-    observeEvent(plotly::event_data("plotly_click", source = "subnetwork_ms1"), {
-      click <- plotly::event_data("plotly_click", source = "subnetwork_ms1")
+    ms1_plot_click <- reactive({
+      req(selected_node_id())
+      plotly::event_data("plotly_click", source = "subnetwork_ms1")
+    })
+
+    observeEvent(ms1_plot_click(), {
+      click <- ms1_plot_click()
       if (!is.null(click$key) && nzchar(click$key)) {
         selected_ms2_feature(as.character(click$key))
       }
@@ -854,10 +958,21 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
     ms1_window_data <- reactive({
       node_id <- selected_node_id()
       req(node_id)
-      net <- selected_network()
-      validate(need(nrow(net) > 0, "No network edges available."))
+
+      if (identical(input$network_scope, "recurrent")) {
+        obj <- selected_object()
+        validate(need(!is.null(obj), "No selected ion-mode object available."))
+        return(make_recurrent_ms1_window_data(
+          object = obj,
+          recurrent = selected_recurrent_ion_network(),
+          selected_node_id = node_id,
+          ion_group_id = input$sub_network
+        ))
+      }
 
       if (identical(input$network_scope, "merged")) {
+        net <- selected_network()
+        validate(need(nrow(net) > 0, "No network edges available."))
         return(make_ms1_window_data(
           positive_object = global_data$object_pos_network,
           negative_object = global_data$object_neg_network,
@@ -869,6 +984,8 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
 
       obj <- selected_object()
       validate(need(!is.null(obj), "No selected ion-mode object available."))
+      net <- selected_network()
+      validate(need(nrow(net) > 0, "No network edges available."))
       make_ms1_window_data(
         object = obj,
         network = net,
@@ -881,6 +998,21 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
       node_id <- selected_node_id()
       if (is.null(node_id)) {
         return("Click a network node to inspect features within its retention-time window.")
+      }
+      if (identical(input$network_scope, "recurrent")) {
+        display <- rendered_network()
+        if (is.null(display)) {
+          return(paste("Selected node:", node_id))
+        }
+        hit <- display$nodes[display$nodes$id == node_id, , drop = FALSE]
+        if (nrow(hit) == 0) {
+          return(paste("Selected node:", node_id))
+        }
+        feature_id <- node_id_to_feature_id(node_id)
+        dat <- ms1_window_data()
+        inspect <- if (has_text(feature_id)) paste0(" | inspect feature: ", feature_id) else ""
+        return(paste0(gsub("<br>", " | ", hit$title[1], fixed = TRUE),
+                      " | group features: ", nrow(dat$features), inspect))
       }
       dat <- ms1_window_data()
       sel <- dat$features[dat$features$variable_id == node_id, , drop = FALSE]
@@ -905,7 +1037,10 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
 
     selected_ms1_peak_id <- reactive({
       peak_id <- selected_ms2_feature()
-      if (is.null(peak_id) || !nzchar(peak_id)) selected_node_id() else peak_id
+      if (!is.null(peak_id) && nzchar(peak_id)) {
+        return(peak_id)
+      }
+      node_id_to_feature_id(selected_node_id())
     })
 
     ms2_spectrum_data <- reactive({
@@ -1033,6 +1168,9 @@ make_network_display_data <- function(object, network, sub_network = "all", max_
   variable_info <- massdataset::extract_variable_info(object)
   feature_ids <- unique(c(network$from, network$to))
   variable_info <- variable_info[match(feature_ids, variable_info$variable_id), , drop = FALSE]
+  roles <- extract_feature_network_roles(object)
+  roles <- roles[roles$feature_id %in% feature_ids, , drop = FALSE]
+  role_by_feature <- stats::setNames(roles$network_role, roles$feature_id)
 
   node_type <- rep("Feature", length(feature_ids))
   names(node_type) <- feature_ids
@@ -1040,15 +1178,18 @@ make_network_display_data <- function(object, network, sub_network = "all", max_
   node_type[unique(network$to[network$type == "Isotope"])] <- "Natural isotope"
   node_type[unique(network$to[network$type == "ISF"])] <- "ISF"
   node_type[unique(network$from[network$type == "ISF"])] <- "Parent ion"
+  role_node_type <- feature_network_role_node_type(role_by_feature[feature_ids])
+  node_type[has_text(role_node_type)] <- role_node_type[has_text(role_node_type)]
 
   nodes <- data.frame(
     id = feature_ids,
     label = feature_ids,
     group = unname(node_type[feature_ids]),
     title = sprintf(
-      "ID: %s<br>Type: %s<br>m/z: %.5f<br>RT: %.2f",
+      "ID: %s<br>Type: %s<br>Role: %s<br>m/z: %.5f<br>RT: %.2f",
       feature_ids,
       unname(node_type[feature_ids]),
+      coerce_text(role_by_feature[feature_ids], "unresolved"),
       variable_info$mz,
       variable_info$rt
     ),
@@ -1060,21 +1201,199 @@ make_network_display_data <- function(object, network, sub_network = "all", max_
     to = network$to,
     label = network$annotation,
     title = sprintf(
-      "Type: %s<br>Annotation: %s<br>Evidence: %s<br>Confidence: %.3f<br>Correlation: %.3f<br>m/z error: %.3f ppm<br>RT diff: %.2f sec",
+      "Type: %s<br>Annotation: %s<br>Evidence: %s<br>Class: %s<br>Confidence: %.3f<br>Correlation: %.3f<br>Scores: mz %.2f | RT %.2f | cor %.2f | MS2 %.2f | rule %.2f<br>m/z error: %.3f ppm<br>RT diff: %.2f sec",
       network$type,
       network$annotation,
       ifelse(is.na(network$evidence_level) | !nzchar(network$evidence_level),
              "not scored", network$evidence_level),
+      network$confidence_class,
       network$confidence,
       network$abundance_cor,
+      network$mz_score,
+      network$rt_score,
+      network$cor_score,
+      network$ms2_score,
+      network$rule_score,
       network$mz_error_ppm,
       network$rt_diff
     ),
     arrows = "to",
+    color = vapply(network$abundance_cor, correlation_edge_color, character(1)),
+    width = pmax(1, 1 + 5 * network$confidence),
+    dashes = network$confidence_class %in% c("weak_relation", "exploratory_relation"),
     stringsAsFactors = FALSE
   )
 
   list(nodes = nodes, edges = edges, truncated = truncated)
+}
+
+make_recurrent_ion_display_data <- function(recurrent, ion_group_id = "all", max_edges = Inf) {
+  if (is.null(recurrent)) {
+    recurrent <- empty_recurrent_ion_network()
+  }
+  nodes <- recurrent$nodes
+  edges <- recurrent$edges
+  groups <- recurrent$groups
+  if (nrow(nodes) == 0 || nrow(edges) == 0) {
+    return(NULL)
+  }
+
+  if (!identical(ion_group_id, "all")) {
+    edges <- edges[edges$ion_group_id == ion_group_id, , drop = FALSE]
+    nodes <- nodes[nodes$ion_group_id == ion_group_id, , drop = FALSE]
+    linked_ids <- unique(c(edges$from, edges$to))
+    nodes <- nodes[nodes$id %in% linked_ids, , drop = FALSE]
+  } else {
+    keep_groups <- groups[order(groups$n_instances, groups$parent_resolved_n, decreasing = TRUE), , drop = FALSE]
+    if (is.finite(max_edges) && nrow(edges) > max_edges) {
+      keep_group_ids <- keep_groups$ion_group_id
+      kept_edges <- list()
+      edge_count <- 0L
+      for (gid in keep_group_ids) {
+        candidate <- edges[edges$ion_group_id == gid, , drop = FALSE]
+        if (edge_count + nrow(candidate) > max_edges && edge_count > 0) {
+          break
+        }
+        kept_edges[[length(kept_edges) + 1L]] <- candidate
+        edge_count <- edge_count + nrow(candidate)
+      }
+      edges <- dplyr::bind_rows(kept_edges)
+      nodes <- nodes[nodes$id %in% unique(c(edges$from, edges$to)), , drop = FALSE]
+    }
+  }
+
+  if (nrow(nodes) == 0 || nrow(edges) == 0) {
+    return(NULL)
+  }
+
+  nodes <- nodes[!duplicated(nodes$id), , drop = FALSE]
+  edges$color <- dplyr::case_when(
+    edges$relation == "resolved_parent_to_isf" ~ "#2563eb",
+    edges$relation == "neutral_loss_virtual_explanation" ~ "#64748b",
+    TRUE ~ "#94a3b8"
+  )
+  edges$width <- dplyr::case_when(
+    edges$relation == "resolved_parent_to_isf" ~ 3,
+    edges$relation == "neutral_loss_virtual_explanation" ~ 1.5,
+    TRUE ~ 1
+  )
+
+  list(
+    nodes = nodes[, c("id", "label", "group", "title", "ion_group_id", "feature_id"), drop = FALSE],
+    edges = edges[, c("from", "to", "label", "title", "arrows", "dashes", "color", "width"), drop = FALSE],
+    truncated = identical(ion_group_id, "all") && is.finite(max_edges) && nrow(recurrent$edges) > nrow(edges)
+  )
+}
+
+node_id_to_feature_id <- function(node_id) {
+  if (is.null(node_id) || length(node_id) == 0) {
+    return(NULL)
+  }
+  if (length(node_id) > 1) {
+    return(vapply(node_id, function(x) node_id_to_feature_id(x) %||% NA_character_, character(1)))
+  }
+  if (!nzchar(node_id)) {
+    return(NULL)
+  }
+  node_id <- as.character(node_id)
+  if (grepl("^feature::", node_id)) {
+    return(sub("^feature::", "", node_id))
+  }
+  if (grepl("^parent::", node_id)) {
+    return(sub("^parent::", "", node_id))
+  }
+  if (grepl("^pos::|^neg::", node_id)) {
+    return(node_id)
+  }
+  if (grepl("^recurrent::|^neutral_loss::", node_id)) {
+    return(NULL)
+  }
+  node_id
+}
+
+node_id_to_ion_group_id <- function(node_id, recurrent) {
+  if (is.null(node_id) || !nzchar(node_id) || is.null(recurrent) || nrow(recurrent$nodes) == 0) {
+    return(NA_character_)
+  }
+  hit <- recurrent$nodes[recurrent$nodes$id == node_id, , drop = FALSE]
+  if (nrow(hit) > 0 && has_text(hit$ion_group_id[1])) {
+    return(hit$ion_group_id[1])
+  }
+  if (grepl("^recurrent::", node_id)) {
+    return(sub("^recurrent::", "", node_id))
+  }
+  NA_character_
+}
+
+make_recurrent_ms1_window_data <- function(object,
+                                           recurrent,
+                                           selected_node_id,
+                                           ion_group_id = "all") {
+  feature_table <- feature_spectrum_table(object)
+  if (nrow(feature_table) == 0 || is.null(recurrent) || nrow(recurrent$nodes) == 0) {
+    return(list(features = feature_table[0, , drop = FALSE],
+                arrows = data.frame(), selected_id = node_id_to_feature_id(selected_node_id)))
+  }
+
+  selected_feature_id <- node_id_to_feature_id(selected_node_id)
+  selected_group_id <- if (!identical(ion_group_id, "all")) {
+    ion_group_id
+  } else {
+    node_id_to_ion_group_id(selected_node_id, recurrent)
+  }
+
+  group_nodes <- recurrent$nodes
+  if (has_text(selected_group_id)) {
+    group_nodes <- group_nodes[group_nodes$ion_group_id == selected_group_id, , drop = FALSE]
+  }
+  feature_ids <- unique(group_nodes$feature_id[has_text(group_nodes$feature_id)])
+  feature_ids <- feature_ids[feature_ids %in% feature_table$variable_id]
+  features <- feature_table[feature_table$variable_id %in% feature_ids, , drop = FALSE]
+  if (nrow(features) == 0) {
+    return(list(features = feature_table[0, , drop = FALSE],
+                arrows = data.frame(), selected_id = selected_feature_id))
+  }
+
+  features <- features[order(features$rt, features$mz), , drop = FALSE]
+  features$is_selected <- if (isTRUE(has_text(selected_feature_id))) {
+    features$variable_id == selected_feature_id
+  } else {
+    rep(FALSE, nrow(features))
+  }
+  features$hover <- sprintf(
+    "Feature: %s<br>m/z: %.5f<br>RT: %.2f sec<br>Mean intensity: %.3g",
+    features$variable_id,
+    features$mz,
+    features$rt,
+    features$mean_intensity
+  )
+
+  recurrent_edges <- recurrent$edges
+  if (has_text(selected_group_id)) {
+    recurrent_edges <- recurrent_edges[recurrent_edges$ion_group_id == selected_group_id, , drop = FALSE]
+  }
+  parent_edges <- recurrent_edges[recurrent_edges$relation == "resolved_parent_to_isf", , drop = FALSE]
+  arrows <- data.frame()
+  if (nrow(parent_edges) > 0) {
+    from_ids <- node_id_to_feature_id(parent_edges$from)
+    to_ids <- node_id_to_feature_id(parent_edges$to)
+    keep <- from_ids %in% features$variable_id & to_ids %in% features$variable_id
+    if (any(keep)) {
+      from_features <- features[match(from_ids[keep], features$variable_id), , drop = FALSE]
+      to_features <- features[match(to_ids[keep], features$variable_id), , drop = FALSE]
+      y_base <- pmax(from_features$mean_intensity, to_features$mean_intensity, na.rm = TRUE)
+      y_base[!is.finite(y_base)] <- 0
+      arrows <- data.frame(
+        x = from_features$mz,
+        xend = to_features$mz,
+        y_arrow = y_base * 1.08 + 1,
+        label = "ISF source",
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+
+  list(features = features, arrows = arrows, selected_id = selected_feature_id)
 }
 
 make_merged_network_display_data <- function(positive_object,
@@ -1150,17 +1469,26 @@ make_merged_network_display_data <- function(positive_object,
     to = network$to,
     label = network$annotation,
     title = sprintf(
-      "Type: %s<br>Annotation: %s<br>Evidence: %s<br>Confidence: %.3f<br>Correlation: %.3f<br>m/z error: %.3f ppm<br>RT diff: %.2f sec",
+      "Type: %s<br>Annotation: %s<br>Evidence: %s<br>Class: %s<br>Confidence: %.3f<br>Correlation: %.3f<br>Scores: mz %.2f | RT %.2f | cor %.2f | MS2 %.2f | rule %.2f<br>m/z error: %.3f ppm<br>RT diff: %.2f sec",
       network$type,
       network$annotation,
       ifelse(is.na(network$evidence_level) | !nzchar(network$evidence_level),
              "not scored", network$evidence_level),
+      network$confidence_class,
       network$confidence,
       network$abundance_cor,
+      network$mz_score,
+      network$rt_score,
+      network$cor_score,
+      network$ms2_score,
+      network$rule_score,
       network$mz_error_ppm,
       network$rt_diff
     ),
     arrows = "to",
+    color = vapply(network$abundance_cor, correlation_edge_color, character(1)),
+    width = pmax(1, 1 + 5 * network$confidence),
+    dashes = network$confidence_class %in% c("weak_relation", "exploratory_relation"),
     stringsAsFactors = FALSE
   )
 
@@ -1199,6 +1527,34 @@ get_network_component_membership <- function(network) {
                                          directed = FALSE,
                                          vertices = data.frame(name = feature_ids))
   igraph::components(graph)$membership
+}
+
+correlation_edge_color <- function(correlation) {
+  correlation <- suppressWarnings(as.numeric(correlation)[1])
+  if (!is.finite(correlation)) {
+    return("#9e9e9e")
+  }
+  if (correlation < 0.3) {
+    return("#bdbdbd")
+  }
+  if (correlation < 0.6) {
+    return("#74a9cf")
+  }
+  if (correlation < 0.8) {
+    return("#2b8cbe")
+  }
+  "#045a8d"
+}
+
+feature_network_role_node_type <- function(role) {
+  role <- as.character(role)
+  dplyr::case_when(
+    role == "putative_parent" ~ "Parent ion",
+    grepl("isf|fragment", role, ignore.case = TRUE) ~ "ISF",
+    grepl("isotope", role, ignore.case = TRUE) ~ "Natural isotope",
+    grepl("adduct", role, ignore.case = TRUE) ~ "Adduct",
+    TRUE ~ NA_character_
+  )
 }
 
 make_ms1_window_data <- function(object = NULL,
@@ -1380,12 +1736,30 @@ plot_ms1_window <- function(ms1_data) {
         type = "scatter",
         mode = "lines",
         line = list(color = "#d95f02", width = 1.5, dash = "dot"),
-        text = arrow$label,
-        hoverinfo = "text",
+        hoverinfo = "skip",
         showlegend = FALSE,
         inherit = FALSE
       )
     }
+    arrow_points <- data.frame(
+      x = (ms1_data$arrows$x + ms1_data$arrows$xend) / 2,
+      y = ms1_data$arrows$y_arrow,
+      label = ms1_data$arrows$label,
+      stringsAsFactors = FALSE
+    )
+    p <- plotly::add_trace(
+      p,
+      data = arrow_points,
+      x = ~x,
+      y = ~y,
+      type = "scatter",
+      mode = "markers",
+      text = ~label,
+      hoverinfo = "text",
+      marker = list(color = "#d95f02", size = 8, symbol = "circle", line = list(color = "#ffffff", width = 1)),
+      showlegend = FALSE,
+      inherit = FALSE
+    )
     annotations <- lapply(seq_len(nrow(ms1_data$arrows)), function(i) {
       arrow <- ms1_data$arrows[i, ]
       list(
@@ -1513,15 +1887,20 @@ extract_feature_ms2_data <- function(object,
   }
   colnames(peaks) <- c("mz", "intensity")
   peaks$relative_intensity <- 100 * peaks$intensity / max(peaks$intensity, na.rm = TRUE)
-  top_n <- max(1, min(as.integer(top_n), nrow(peaks)))
-  top_idx <- order(peaks$relative_intensity, decreasing = TRUE)[seq_len(top_n)]
+  valid_peak_idx <- which(is.finite(peaks$mz) & is.finite(peaks$relative_intensity))
+  if (length(valid_peak_idx) == 0) {
+    return(empty_ms2_plot_data(display_id, selected$mz[1], selected$rt[1]))
+  }
+  top_n <- max(1, min(as.integer(top_n), length(valid_peak_idx)))
+  top_idx <- valid_peak_idx[order(peaks$relative_intensity[valid_peak_idx], decreasing = TRUE)[seq_len(top_n)]]
+  top_idx <- top_idx[!is.na(top_idx)]
   peaks$annotate <- seq_len(nrow(peaks)) %in% top_idx
   peaks$fragment_annotation <- ""
   peaks$fragment_annotation[top_idx] <- annotate_ms2_fragment_peaks(
     peaks$mz,
     annotate_idx = top_idx,
     mz_tol = mz_tol
-  )
+  )[top_idx]
   nl_arrows <- annotate_ms2_neutral_loss_pairs(
     peaks = peaks,
     mz_tol = mz_tol,
@@ -1699,7 +2078,7 @@ plot_ms2_spectrum <- function(ms2_data) {
       mode = "markers",
       text = ~label,
       hoverinfo = "text",
-      marker = list(size = 8, color = "rgba(217,95,2,0.001)"),
+      marker = list(size = 8, color = "#d95f02", symbol = "circle-open", line = list(color = "#d95f02", width = 1.5)),
       showlegend = FALSE,
       inherit = FALSE
     ) |>

@@ -42,7 +42,7 @@ MetMiner imports raw MS1 data through `massprocesser::process_data()`, using the
 After peak picking, MetMiner supports blank-informed intensity masking. Blank samples estimate feature-specific background, and non-blank sample intensities that do not exceed this background are converted to missing values before downstream MV/RSD filters. This step is complementary to XCMS `noise`, `prefilter`, and `snthresh` thresholds rather than a replacement for them.
 
 ### Feature Network Analysis and Visualization
-The Feature Network module separates table-oriented analysis from interactive interpretation. Users can generate isotope, adduct, ISF, and cross-polarity relationship tables, then inspect sub-networks in an interactive graph. Selecting a node displays an MS1 lollipop spectrum for the whole sub-network, optional raw chromatograms from Tidymass/XCMS intermediate `xdata`, and an MS2 lollipop spectrum with diagnostic fragment and neutral-loss annotations.
+The Feature Network module separates RT-local ion-form relationships from cross-RT recurrent fragment interpretation. Users can build isotope, adduct, and ISF networks inside an RT tolerance window, inspect repeated same-m/z ions across retention times in a recurrent-ion layer, and use both layers during annotation filtering. Selecting a real feature node displays the RT-local MS1 lollipop spectrum, optional raw chromatograms from Tidymass/XCMS intermediate `xdata`, and an MS2 lollipop spectrum with diagnostic fragment and neutral-loss annotations. Final non-redundant annotation tables now carry recurrent-ion audit fields so resolved recurrent ISFs can be removed while unresolved repeated ions remain reviewable.
 
 ---
 

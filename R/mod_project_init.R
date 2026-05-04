@@ -99,6 +99,13 @@ mod_project_init_ui <- function(id) {
               title = "Resuming Task",
               icon = bsicons::bs_icon("arrow-repeat"),
 
+              tags$label("Resume by Job ID:", class = "form-label fw-bold text-primary"),
+              textInput(ns("resume_job_id"), NULL, value = "", placeholder = "MM20260504XXXXXXXX"),
+              actionButton(ns("load_job_id"), "Load Previous Job", icon = icon("folder-open"),
+                           class = "btn-outline-primary w-100 mb-3"),
+
+              div(class="border-top my-3"),
+
               selectInput(ns("init_steps"), "Resume from Step:",
                           choices = c("None" = "none",
                                       "Remove Noise" = "Remove noisey feature",
@@ -110,14 +117,9 @@ mod_project_init_ui <- function(id) {
 
               div(class="border-top my-3"),
 
-              tags$small(class="text-muted d-block mb-2", "Upload existing objects (.rda):"),
+              tags$small(class="text-muted d-block mb-2", "Or upload existing objects (.rda):"),
               fileInput(ns('saved_obj_pos'), 'Positive Mode Object', accept = '.rda'),
-              fileInput(ns('saved_obj_neg'), 'Negative Mode Object', accept = '.rda'),
-
-              conditionalPanel(
-                condition = sprintf("input['%s'] == 'Annotation filtering'", ns("init_steps")),
-                fileInput(ns('saved_dblist'), 'Annotation DB List (.dblist)', accept = '.dblist')
-              )
+              fileInput(ns('saved_obj_neg'), 'Negative Mode Object', accept = '.rda')
             )
           )
         ),
@@ -138,6 +140,10 @@ mod_project_init_ui <- function(id) {
 
             # Project status display.
             uiOutput(ns("wd_status")),
+            tags$div(class="mb-3",
+                     tags$label("Job ID:", class="form-label text-muted"),
+                     verbatimTextOutput(ns("generated_job_id"), placeholder = TRUE)
+            ),
             tags$div(class="mb-3",
                      tags$label("Generated Working Directory:", class="form-label text-muted"),
                      verbatimTextOutput(ns("generated_wd_path"), placeholder = TRUE)
@@ -190,13 +196,14 @@ mod_project_init_server <- function(id, prj_init) {
 
     # --- 1. State Management ---
     wd_generated <- reactiveVal(FALSE)
+    initial_job_id <- generate_metminer_job_id()
+    current_job_id <- reactiveVal(initial_job_id)
 
     # Generate a candidate MetMiner project directory.
-    generate_random_path <- function() {
+    generate_random_path <- function(job_id = initial_job_id) {
       base_dir <- path.expand("~/metminer_results")
       timestamp <- format(Sys.time(), "%Y%m%d")
-      rand_str <- paste0(sample(c(letters, 0:9), 6, replace = TRUE), collapse = "")
-      folder_name <- paste0("proj_", timestamp, "_", rand_str)
+      folder_name <- paste0("proj_", timestamp, "_", job_id)
       file.path(base_dir, folder_name)
     }
 
@@ -233,6 +240,14 @@ mod_project_init_server <- function(id, prj_init) {
       } else {
         # Show the candidate path as a preview.
         paste(candidate_path(), "(Preview)")
+      }
+    })
+
+    output$generated_job_id <- renderText({
+      if (!is.null(prj_init$job_id) && nzchar(prj_init$job_id)) {
+        prj_init$job_id
+      } else {
+        paste(current_job_id(), "(Preview)")
       }
     })
 
@@ -273,6 +288,57 @@ mod_project_init_server <- function(id, prj_init) {
     })
 
     # --- 4. Initialization Logic ---
+    restore_job <- function(job_id) {
+      full_path <- find_metminer_job(job_id)
+      if (is.null(full_path)) {
+        shinyalert::shinyalert("Job Not Found", paste("No project found for job id:", job_id), type = "error")
+        return(FALSE)
+      }
+
+      prj_init$job_id <- trimws(job_id)
+      prj_init$wd <- full_path
+      prj_init$mass_dataset_dir <- file.path(prj_init$wd, "mass_dataset")
+      prj_init$data_export_dir <- file.path(prj_init$wd, "data_export")
+
+      sample_info_file <- file.path(prj_init$wd, "sample_info.rds")
+      if (file.exists(sample_info_file)) {
+        prj_init$sample_info <- readRDS(sample_info_file)
+        output$tbl_sample_info <- DT::renderDataTable({
+          DT::datatable(prj_init$sample_info, options = list(scrollX = TRUE, pageLength = 5))
+        })
+      }
+
+      loaded_objects <- load_metminer_saved_objects(prj_init$wd)
+      prj_init$loaded_objects <- loaded_objects
+      prj_init$object_positive.init <- latest_loaded_metminer_object(loaded_objects, "positive")
+      prj_init$object_negative.init <- latest_loaded_metminer_object(loaded_objects, "negative")
+
+      register_metminer_job(prj_init$job_id, prj_init$wd)
+      wd_generated(TRUE)
+      shinyjs::disable("action_init")
+
+      loaded_names <- names(loaded_objects)
+      shinyalert::shinyalert(
+        "Job Loaded",
+        paste0(
+          "Workspace restored for job ", prj_init$job_id, ".\n",
+          "Loaded objects: ",
+          if (length(loaded_names) > 0) paste(loaded_names, collapse = ", ") else "none"
+        ),
+        type = "success"
+      )
+      TRUE
+    }
+
+    observeEvent(input$load_job_id, {
+      job_id <- trimws(input$resume_job_id %||% "")
+      if (!nzchar(job_id)) {
+        shinyalert::shinyalert("Missing Job ID", "Please enter a job id.", type = "error")
+        return()
+      }
+      restore_job(job_id)
+    })
+
     observeEvent(input$action_init, {
       # Prevent repeated initialization in the same session.
       if (wd_generated()) {
@@ -288,11 +354,13 @@ mod_project_init_server <- function(id, prj_init) {
       tryCatch({
         # A. Use the current candidate path.
         full_path <- candidate_path()
+        job_id <- current_job_id()
 
         # B. Update state.
         wd_generated(TRUE)
 
         # C. Store project paths.
+        prj_init$job_id <- job_id
         prj_init$wd <- full_path
         prj_init$mass_dataset_dir <- file.path(prj_init$wd, "mass_dataset")
         prj_init$data_export_dir <- file.path(prj_init$wd, "data_export")
@@ -313,6 +381,19 @@ mod_project_init_server <- function(id, prj_init) {
           ) |>
           dplyr::mutate(batch = as.character(batch))
 
+        saveRDS(prj_init$sample_info, file.path(prj_init$wd, "sample_info.rds"))
+        saveRDS(
+          list(
+            job_id = prj_init$job_id,
+            wd = prj_init$wd,
+            mass_dataset_dir = prj_init$mass_dataset_dir,
+            data_export_dir = prj_init$data_export_dir,
+            created_at = as.character(Sys.time())
+          ),
+          file.path(prj_init$wd, "project_info.rds")
+        )
+        register_metminer_job(prj_init$job_id, prj_init$wd)
+
         output$tbl_sample_info <- DT::renderDataTable({
           DT::datatable(prj_init$sample_info, options = list(scrollX = TRUE, pageLength = 5))
         })
@@ -320,7 +401,7 @@ mod_project_init_server <- function(id, prj_init) {
         # E. Restore task state when resuming.
         prj_init$steps <- input$init_steps
 
-        # Load optional mass_dataset objects.
+        # E2. Load optional mass_dataset objects from manual upload.
         load_object <- function(file_input, label, slot_name) {
           if (!is.null(file_input)) {
             res <- validate_file(file_input$datapath, "Unknown", label)
@@ -338,18 +419,10 @@ mod_project_init_server <- function(id, prj_init) {
         has_pos <- load_object(input$saved_obj_pos, "Positive Object", "object_positive.init")
         has_neg <- load_object(input$saved_obj_neg, "Negative Object", "object_negative.init")
 
-        # F. Load DB list when resuming annotation filtering.
-        if (prj_init$steps == "Annotation filtering" && !is.null(input$saved_dblist)) {
-          env_db <- new.env()
-          load(input$saved_dblist$datapath, envir = env_db)
-          db_obj_name <- ls(env_db)[1]
-          prj_init$dblist <- get(db_obj_name, envir = env_db)
-        }
-
-        # G. Report success.
+        # F. Report success.
         shinyalert::shinyalert(
           title = "MetMiner Project Initialized!",
-          text = "Workspace created successfully. You can now proceed to the next step.",
+          text = paste0("Workspace created successfully.\nJob ID: ", prj_init$job_id),
           type = "success"
         )
 

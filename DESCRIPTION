@@ -29,10 +29,12 @@ Imports:
     golem,
     igraph,
     magrittr,
+    massdbbuildin,
     masscleaner,
     massdataset,
     massprocesser,
     massqc,
+    metid,
     MSnbase,
     patchwork,
     plotly,
@@ -49,7 +51,9 @@ Imports:
     xcms
 Remotes:
     tidymass/masscleaner,
+    tidymass/massdbbuildin,
     tidymass/massdataset,
+    tidymass/metid,
     tidymass/massprocesser,
     tidymass/massqc
 Encoding: UTF-8

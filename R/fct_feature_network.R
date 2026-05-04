@@ -28,6 +28,36 @@ extract_feature_network <- function(object) {
   normalize_feature_network(network)
 }
 
+set_feature_network_roles <- function(object, feature_network_roles) {
+  check_mass_dataset_object(object)
+  object@other_files$feature_network_roles <- normalize_feature_network_roles(feature_network_roles)
+  object
+}
+
+extract_feature_network_roles <- function(object) {
+  check_mass_dataset_object(object)
+  roles <- object@other_files$feature_network_roles
+  if (is.null(roles)) {
+    return(empty_feature_network_roles())
+  }
+  normalize_feature_network_roles(roles)
+}
+
+set_recurrent_ion_network <- function(object, recurrent_ion_network) {
+  check_mass_dataset_object(object)
+  object@other_files$recurrent_ion_network <- recurrent_ion_network
+  object
+}
+
+extract_recurrent_ion_network <- function(object) {
+  check_mass_dataset_object(object)
+  recurrent <- object@other_files$recurrent_ion_network
+  if (is.null(recurrent)) {
+    return(empty_recurrent_ion_network())
+  }
+  recurrent
+}
+
 #' Merge positive and negative mode feature networks
 #'
 #' Builds a final cross-polarity network by prefixing within-mode feature ids
@@ -75,7 +105,7 @@ merge_polarity_feature_networks <- function(positive_object = NULL,
     )
   }
 
-  normalize_feature_network(do.call(rbind, edges))
+  normalize_feature_network(dplyr::bind_rows(edges))
 }
 
 #' Convert a feature network edge table to an igraph object
@@ -400,7 +430,8 @@ default_plant_fragment_ion_table <- function() {
 #' @param detect Relationship classes to detect.
 #' @param ppm Mass tolerance in ppm.
 #' @param rt_tolerance Retention time tolerance in seconds.
-#' @param cor_cutoff Minimum abundance correlation across samples.
+#' @param cor_cutoff Abundance correlation used as the full-support reference
+#'   for edge scoring. It is not used as a hard filter for within-mode edges.
 #' @param cor_method Correlation method passed to `stats::cor()`.
 #' @param max_charge Maximum charge state checked for isotopes and neutral loss.
 #' @param max_neutral_loss_charge Maximum charge state checked for neutral
@@ -519,11 +550,22 @@ detect_feature_relationships <- function(object,
     }
   }
 
-  network <- normalize_feature_network(do.call(rbind, edges))
+  network <- normalize_feature_network(dplyr::bind_rows(edges))
   network <- add_qc_ratio_stability(network, object, expr)
+  network <- annotate_feature_network_subnetworks(network)
 
   if (store) {
-    return(set_feature_network(object, network))
+    roles <- build_feature_network_roles(network, variable_info, expr)
+    recurrent <- build_recurrent_ion_network(
+      variable_info = variable_info,
+      expression_data = expr,
+      feature_roles = roles,
+      mz_ppm = ppm,
+      min_rt_gap = rt_tolerance
+    )
+    object <- set_feature_network(object, network)
+    object <- set_feature_network_roles(object, roles)
+    return(set_recurrent_ion_network(object, recurrent))
   }
   network
 }
@@ -839,9 +881,18 @@ empty_feature_network <- function() {
     type = character(),
     annotation = character(),
     confidence = numeric(),
+    relation_score = numeric(),
+    confidence_class = character(),
+    sub_network = integer(),
     mz_error_ppm = numeric(),
     rt_diff = numeric(),
     abundance_cor = numeric(),
+    mz_score = numeric(),
+    rt_score = numeric(),
+    cor_score = numeric(),
+    ms2_score = numeric(),
+    rule_score = numeric(),
+    intensity_score = numeric(),
     qc_ratio_rsd = numeric(),
     evidence_level = character(),
     evidence = character(),
@@ -860,6 +911,86 @@ empty_feature_network <- function() {
   )
 }
 
+empty_feature_network_roles <- function() {
+  data.frame(
+    sub_network = integer(),
+    feature_id = character(),
+    mz = numeric(),
+    rt = numeric(),
+    mean_area = numeric(),
+    network_role = character(),
+    parent_feature_id = character(),
+    relation_to_parent = character(),
+    parent_score = numeric(),
+    edge_score_to_parent = numeric(),
+    edge_type_to_parent = character(),
+    edge_annotation_to_parent = character(),
+    evidence_level_to_parent = character(),
+    stringsAsFactors = FALSE
+  )
+}
+
+normalize_feature_network_roles <- function(roles) {
+  if (is.null(roles) || nrow(roles) == 0) {
+    return(empty_feature_network_roles())
+  }
+  roles <- as.data.frame(roles, stringsAsFactors = FALSE)
+  template <- empty_feature_network_roles()
+  missing_cols <- setdiff(colnames(template), colnames(roles))
+  for (col in missing_cols) {
+    roles[[col]] <- template[[col]][NA]
+  }
+  roles <- roles[, colnames(template), drop = FALSE]
+  roles$sub_network <- suppressWarnings(as.integer(roles$sub_network))
+  roles$feature_id <- as.character(roles$feature_id)
+  roles$mz <- suppressWarnings(as.numeric(roles$mz))
+  roles$rt <- suppressWarnings(as.numeric(roles$rt))
+  roles$mean_area <- suppressWarnings(as.numeric(roles$mean_area))
+  roles$network_role <- as.character(roles$network_role)
+  roles$parent_feature_id <- as.character(roles$parent_feature_id)
+  roles$relation_to_parent <- as.character(roles$relation_to_parent)
+  roles$parent_score <- suppressWarnings(as.numeric(roles$parent_score))
+  roles$edge_score_to_parent <- suppressWarnings(as.numeric(roles$edge_score_to_parent))
+  roles$edge_type_to_parent <- as.character(roles$edge_type_to_parent)
+  roles$edge_annotation_to_parent <- as.character(roles$edge_annotation_to_parent)
+  roles$evidence_level_to_parent <- as.character(roles$evidence_level_to_parent)
+  roles
+}
+
+empty_recurrent_ion_network <- function() {
+  list(
+    groups = data.frame(
+      ion_group_id = character(),
+      center_mz = numeric(),
+      n_instances = integer(),
+      rt_min = numeric(),
+      rt_max = numeric(),
+      parent_resolved_n = integer(),
+      stringsAsFactors = FALSE
+    ),
+    nodes = data.frame(
+      id = character(),
+      label = character(),
+      group = character(),
+      title = character(),
+      ion_group_id = character(),
+      feature_id = character(),
+      stringsAsFactors = FALSE
+    ),
+    edges = data.frame(
+      from = character(),
+      to = character(),
+      label = character(),
+      relation = character(),
+      ion_group_id = character(),
+      title = character(),
+      arrows = character(),
+      dashes = logical(),
+      stringsAsFactors = FALSE
+    )
+  )
+}
+
 normalize_feature_network <- function(feature_network) {
   if (is.null(feature_network) || nrow(feature_network) == 0) {
     return(empty_feature_network())
@@ -875,6 +1006,20 @@ normalize_feature_network <- function(feature_network) {
   feature_network$to <- as.character(feature_network$to)
   feature_network$type <- as.character(feature_network$type)
   feature_network$annotation <- as.character(feature_network$annotation)
+  feature_network$confidence <- suppressWarnings(as.numeric(feature_network$confidence))
+  feature_network$relation_score <- suppressWarnings(as.numeric(feature_network$relation_score))
+  missing_relation <- !is.finite(feature_network$relation_score) & is.finite(feature_network$confidence)
+  feature_network$relation_score[missing_relation] <- feature_network$confidence[missing_relation]
+  feature_network$confidence_class <- as.character(feature_network$confidence_class)
+  missing_class <- !has_text(feature_network$confidence_class) & is.finite(feature_network$relation_score)
+  feature_network$confidence_class[missing_class] <- confidence_class_from_score(feature_network$relation_score[missing_class])
+  feature_network$sub_network <- suppressWarnings(as.integer(feature_network$sub_network))
+  feature_network$mz_score <- suppressWarnings(as.numeric(feature_network$mz_score))
+  feature_network$rt_score <- suppressWarnings(as.numeric(feature_network$rt_score))
+  feature_network$cor_score <- suppressWarnings(as.numeric(feature_network$cor_score))
+  feature_network$ms2_score <- suppressWarnings(as.numeric(feature_network$ms2_score))
+  feature_network$rule_score <- suppressWarnings(as.numeric(feature_network$rule_score))
+  feature_network$intensity_score <- suppressWarnings(as.numeric(feature_network$intensity_score))
   feature_network$evidence_level <- as.character(feature_network$evidence_level)
   feature_network$evidence <- as.character(feature_network$evidence)
   feature_network$from_ms2_spectrum_id <- as.character(feature_network$from_ms2_spectrum_id)
@@ -980,6 +1125,21 @@ detect_isotope_edges <- function(variable_info,
                   mean_area[edges$to] / denominator,
                   NA_real_)
   edges <- edges[is.finite(ratio) & ratio <= isotope_intensity_ratio_max, , drop = FALSE]
+  ratio <- ratio[is.finite(ratio) & ratio <= isotope_intensity_ratio_max]
+  edges$intensity_score <- pmax(0, 1 - ratio / isotope_intensity_ratio_max)
+  scores <- edge_relation_scores(
+    mz_error_ppm = edges$mz_error_ppm,
+    ppm = ppm,
+    rt_diff = edges$rt_diff,
+    rt_tolerance = rt_tolerance,
+    abundance_cor = edges$abundance_cor,
+    ms2_score = edges$ms2_score,
+    rule_score = edges$rule_score,
+    intensity_score = edges$intensity_score
+  )
+  edges$confidence <- scores$relation_score
+  edges$relation_score <- scores$relation_score
+  edges$confidence_class <- confidence_class_from_score(scores$relation_score)
   edges
 }
 
@@ -1036,15 +1196,6 @@ detect_mass_difference_edges <- function(variable_info,
       high_ids <- feature_ids[hits]
       hit_errors <- abs(observed_delta[hit_idx] - target_delta) / target_delta * 1e6
       abundance_cor <- pairwise_feature_correlations(cor_cache, low_id, high_ids)
-      keep <- is.finite(abundance_cor) & abundance_cor >= cor_cutoff
-      if (!any(keep)) {
-        next
-      }
-
-      hits <- hits[keep]
-      high_ids <- high_ids[keep]
-      hit_errors <- hit_errors[keep]
-      abundance_cor <- abundance_cor[keep]
 
       if (identical(direction, "high_to_low")) {
         from <- high_ids
@@ -1055,12 +1206,14 @@ detect_mass_difference_edges <- function(variable_info,
       }
 
       rt_delta <- abs(variable_info$rt[hits] - variable_info$rt[i])
-      confidence <- edge_confidence(
+      scores <- edge_relation_scores(
         mz_error_ppm = hit_errors,
         ppm = ppm,
         rt_diff = rt_delta,
         rt_tolerance = rt_tolerance,
-        abundance_cor = abundance_cor
+        abundance_cor = abundance_cor,
+        cor_reference = cor_cutoff,
+        rule_score = 1
       )
 
       edges[[edge_idx]] <- data.frame(
@@ -1068,18 +1221,28 @@ detect_mass_difference_edges <- function(variable_info,
         to = to,
         type = type,
         annotation = dictionary_annotation[d],
-        confidence = confidence,
+        confidence = scores$relation_score,
+        relation_score = scores$relation_score,
+        confidence_class = confidence_class_from_score(scores$relation_score),
         mz_error_ppm = hit_errors,
         rt_diff = rt_delta,
         abundance_cor = abundance_cor,
+        mz_score = scores$mz_score,
+        rt_score = scores$rt_score,
+        cor_score = scores$cor_score,
+        ms2_score = 0,
+        rule_score = scores$rule_score,
+        intensity_score = 0,
         qc_ratio_rsd = NA_real_,
+        evidence_level = "Scored",
+        evidence = "mass_rt_rule_scored",
         stringsAsFactors = FALSE
       )
       edge_idx <- edge_idx + 1L
     }
   }
 
-  normalize_feature_network(do.call(rbind, edges))
+  normalize_feature_network(dplyr::bind_rows(edges))
 }
 
 build_feature_correlation_cache <- function(expression_data, cor_method) {
@@ -1197,8 +1360,10 @@ add_ms2_isf_evidence <- function(edges,
     } else {
       edges$evidence_level[i] <- "L2_ambiguous"
       edges$evidence[i] <- paste(edges$evidence[i], "fragment_mz_in_shared_parent_ms2", sep = ";")
+      edges$ms2_score[i] <- 0.35
       next
     }
+    edges$ms2_score[i] <- 0.65
 
     if (!has_fragment_ms2 || isTRUE(same_spectrum)) {
       if (isTRUE(same_spectrum)) {
@@ -1221,9 +1386,21 @@ add_ms2_isf_evidence <- function(edges,
     if (is.finite(sim$score) && (sim$score > 0.5 || sim$matched_ratio > 0.7)) {
       edges$evidence_level[i] <- "L1"
       edges$evidence[i] <- paste(edges$evidence[i], "ms2_spectral_similarity", sep = ";")
+      edges$ms2_score[i] <- 1
       edges$confidence[i] <- pmin(1, edges$confidence[i] + 0.10)
     }
   }
+
+  edges$relation_score <- combine_edge_score_components(
+    mz_score = edges$mz_score,
+    rt_score = edges$rt_score,
+    rule_score = edges$rule_score,
+    cor_score = edges$cor_score,
+    ms2_score = edges$ms2_score,
+    intensity_score = edges$intensity_score
+  )
+  edges$confidence <- edges$relation_score
+  edges$confidence_class <- confidence_class_from_score(edges$relation_score)
 
   edges
 }
@@ -1290,11 +1467,81 @@ reverse_ms2_similarity <- function(parent_spectrum, fragment_spectrum, mz_tol) {
   )
 }
 
-edge_confidence <- function(mz_error_ppm, ppm, rt_diff, rt_tolerance, abundance_cor) {
+edge_relation_scores <- function(mz_error_ppm,
+                                 ppm,
+                                 rt_diff,
+                                 rt_tolerance,
+                                 abundance_cor,
+                                 cor_reference = 1,
+                                 ms2_score = 0,
+                                 rule_score = 1,
+                                 intensity_score = 0) {
   mass_score <- pmax(0, 1 - mz_error_ppm / ppm)
   rt_score <- pmax(0, 1 - rt_diff / rt_tolerance)
-  cor_score <- pmax(0, abundance_cor)
-  round((0.45 * mass_score) + (0.20 * rt_score) + (0.35 * cor_score), 4)
+  cor_reference <- suppressWarnings(as.numeric(cor_reference)[1])
+  if (!is.finite(cor_reference) || cor_reference <= 0) {
+    cor_reference <- 1
+  }
+  cor_score <- pmax(0, abundance_cor / cor_reference)
+  cor_score[!is.finite(cor_score)] <- 0
+  ms2_score <- rep(ms2_score, length.out = length(mass_score))
+  rule_score <- rep(rule_score, length.out = length(mass_score))
+  intensity_score <- rep(intensity_score, length.out = length(mass_score))
+  ms2_score[!is.finite(ms2_score)] <- 0
+  rule_score[!is.finite(rule_score)] <- 0
+  intensity_score[!is.finite(intensity_score)] <- 0
+
+  relation_score <- (0.30 * mass_score) +
+    (0.20 * rt_score) +
+    (0.20 * rule_score) +
+    (0.15 * cor_score) +
+    (0.10 * ms2_score) +
+    (0.05 * intensity_score)
+
+  data.frame(
+    relation_score = round(pmin(1, pmax(0, relation_score)), 4),
+    mz_score = round(pmin(1, pmax(0, mass_score)), 4),
+    rt_score = round(pmin(1, pmax(0, rt_score)), 4),
+    cor_score = round(pmin(1, pmax(0, cor_score)), 4),
+    ms2_score = round(pmin(1, pmax(0, ms2_score)), 4),
+    rule_score = round(pmin(1, pmax(0, rule_score)), 4),
+    intensity_score = round(pmin(1, pmax(0, intensity_score)), 4)
+  )
+}
+
+edge_confidence <- function(mz_error_ppm, ppm, rt_diff, rt_tolerance, abundance_cor) {
+  edge_relation_scores(
+    mz_error_ppm = mz_error_ppm,
+    ppm = ppm,
+    rt_diff = rt_diff,
+    rt_tolerance = rt_tolerance,
+    abundance_cor = abundance_cor
+  )$relation_score
+}
+
+combine_edge_score_components <- function(mz_score,
+                                          rt_score,
+                                          rule_score,
+                                          cor_score,
+                                          ms2_score,
+                                          intensity_score) {
+  score <- (0.30 * mz_score) +
+    (0.20 * rt_score) +
+    (0.20 * rule_score) +
+    (0.15 * cor_score) +
+    (0.10 * ms2_score) +
+    (0.05 * intensity_score)
+  round(pmin(1, pmax(0, score)), 4)
+}
+
+confidence_class_from_score <- function(score) {
+  dplyr::case_when(
+    !is.finite(score) ~ "unscored",
+    score >= 0.85 ~ "high_confidence_relation",
+    score >= 0.65 ~ "probable_relation",
+    score >= 0.45 ~ "weak_relation",
+    TRUE ~ "exploratory_relation"
+  )
 }
 
 add_qc_ratio_stability <- function(network, object, expression_data) {
@@ -1326,7 +1573,400 @@ add_qc_ratio_stability <- function(network, object, expression_data) {
 
   qc_score <- ifelse(is.na(network$qc_ratio_rsd), 0, pmax(0, 1 - network$qc_ratio_rsd))
   network$confidence <- round((0.85 * network$confidence) + (0.15 * qc_score), 4)
+  network$relation_score <- network$confidence
+  network$confidence_class <- confidence_class_from_score(network$confidence)
   network
+}
+
+annotate_feature_network_subnetworks <- function(network) {
+  network <- normalize_feature_network(network)
+  if (nrow(network) == 0) {
+    return(network)
+  }
+  feature_ids <- unique(c(network$from, network$to))
+  graph <- igraph::graph_from_data_frame(
+    network[, c("from", "to"), drop = FALSE],
+    directed = FALSE,
+    vertices = data.frame(name = feature_ids)
+  )
+  membership <- igraph::components(graph)$membership
+  network$sub_network <- as.integer(membership[network$from])
+  network
+}
+
+build_feature_network_roles <- function(network, variable_info, expression_data = NULL) {
+  network <- normalize_feature_network(network)
+  if (nrow(network) == 0) {
+    return(empty_feature_network_roles())
+  }
+
+  variable_info <- as.data.frame(variable_info, stringsAsFactors = FALSE)
+  variable_info$variable_id <- as.character(variable_info$variable_id)
+  variable_info$mz <- suppressWarnings(as.numeric(variable_info$mz))
+  variable_info$rt <- suppressWarnings(as.numeric(variable_info$rt))
+  variable_info$mean_area <- NA_real_
+  if (!is.null(expression_data)) {
+    expr <- as.matrix(expression_data)
+    mean_area <- rowMeans(expr, na.rm = TRUE)
+    variable_info$mean_area <- as.numeric(mean_area[match(variable_info$variable_id, names(mean_area))])
+  }
+  rownames(variable_info) <- variable_info$variable_id
+
+  membership <- get_feature_network_membership(network)
+  rows <- list()
+  row_idx <- 1L
+  for (sid in sort(unique(unname(membership)))) {
+    ids <- names(membership)[membership == sid]
+    subnet_edges <- network[network$from %in% ids & network$to %in% ids, , drop = FALSE]
+    parent_scores <- score_feature_network_parent_candidates(ids, subnet_edges, variable_info)
+    parent_id <- names(parent_scores)[which.max(parent_scores)]
+
+    for (feature_id in ids) {
+      relation <- describe_feature_network_relation(feature_id, parent_id, subnet_edges)
+      info <- variable_info[feature_id, , drop = FALSE]
+      rows[[row_idx]] <- data.frame(
+        sub_network = as.integer(sid),
+        feature_id = feature_id,
+        mz = if (nrow(info) > 0) info$mz[1] else NA_real_,
+        rt = if (nrow(info) > 0) info$rt[1] else NA_real_,
+        mean_area = if (nrow(info) > 0) info$mean_area[1] else NA_real_,
+        network_role = relation$role,
+        parent_feature_id = parent_id,
+        relation_to_parent = relation$relation,
+        parent_score = parent_scores[feature_id],
+        edge_score_to_parent = relation$edge_score,
+        edge_type_to_parent = relation$edge_type,
+        edge_annotation_to_parent = relation$edge_annotation,
+        evidence_level_to_parent = relation$evidence_level,
+        stringsAsFactors = FALSE
+      )
+      row_idx <- row_idx + 1L
+    }
+  }
+
+  normalize_feature_network_roles(do.call(rbind, rows))
+}
+
+get_feature_network_membership <- function(network) {
+  feature_ids <- unique(c(network$from, network$to))
+  graph <- igraph::graph_from_data_frame(
+    network[, c("from", "to"), drop = FALSE],
+    directed = FALSE,
+    vertices = data.frame(name = feature_ids)
+  )
+  igraph::components(graph)$membership
+}
+
+score_feature_network_parent_candidates <- function(feature_ids, subnet_edges, variable_info) {
+  score <- stats::setNames(rep(0, length(feature_ids)), feature_ids)
+  if (nrow(subnet_edges) > 0) {
+    edge_score <- subnet_edges$relation_score
+    edge_score[!is.finite(edge_score)] <- 0
+    add_score <- function(ids, values, weight) {
+      if (length(ids) == 0) return()
+      subtotal <- tapply(values * weight, ids, sum, na.rm = TRUE)
+      score[names(subtotal)] <<- score[names(subtotal)] + as.numeric(subtotal)
+    }
+    add_score(subnet_edges$from[subnet_edges$type %in% c("ISF", "Cross-polarity ISF")],
+              edge_score[subnet_edges$type %in% c("ISF", "Cross-polarity ISF")], 3)
+    add_score(subnet_edges$from[subnet_edges$type == "Isotope"],
+              edge_score[subnet_edges$type == "Isotope"], 1.5)
+    add_score(c(subnet_edges$from, subnet_edges$to), rep(edge_score, 2), 0.2)
+  }
+
+  info <- variable_info[feature_ids, , drop = FALSE]
+  if (nrow(info) > 0 && any(is.finite(info$mean_area))) {
+    area_score <- normalize_feature_network_vector(info$mean_area)
+    names(area_score) <- rownames(info)
+    score[names(area_score)] <- score[names(area_score)] + area_score
+  }
+  score
+}
+
+describe_feature_network_relation <- function(feature_id, parent_id, subnet_edges) {
+  empty <- list(
+    role = "putative_parent",
+    relation = "self",
+    edge_score = NA_real_,
+    edge_type = NA_character_,
+    edge_annotation = NA_character_,
+    evidence_level = NA_character_
+  )
+  if (identical(feature_id, parent_id)) {
+    return(empty)
+  }
+
+  connected <- subnet_edges[
+    (subnet_edges$from == parent_id & subnet_edges$to == feature_id) |
+      (subnet_edges$from == feature_id & subnet_edges$to == parent_id),
+    , drop = FALSE
+  ]
+  if (nrow(connected) == 0) {
+    return(list(
+      role = "network_neighbor",
+      relation = "connected_indirectly",
+      edge_score = NA_real_,
+      edge_type = NA_character_,
+      edge_annotation = NA_character_,
+      evidence_level = NA_character_
+    ))
+  }
+
+  connected <- connected[order(feature_network_edge_role_priority(connected$type),
+                               -connected$relation_score,
+                               na.last = TRUE), , drop = FALSE]
+  edge <- connected[1, , drop = FALSE]
+  direct_parent_to_child <- edge$from[1] == parent_id
+  role <- switch(
+    edge$type[1],
+    "Isotope" = if (direct_parent_to_child) "isotope_of_parent" else "parent_isotope_or_reverse_isotope_edge",
+    "Adduct" = "adduct_of_parent",
+    "ISF" = if (direct_parent_to_child) "isf_fragment_of_parent" else "possible_parent_of_selected_parent",
+    "Cross-polarity" = "cross_polarity_counterpart",
+    "Cross-polarity ISF" = if (direct_parent_to_child) "cross_polarity_isf_fragment" else "possible_cross_polarity_parent",
+    "network_neighbor"
+  )
+  list(
+    role = role,
+    relation = if (direct_parent_to_child) paste("parent_to_feature", edge$type[1], sep = "::") else paste("feature_to_parent", edge$type[1], sep = "::"),
+    edge_score = edge$relation_score[1],
+    edge_type = edge$type[1],
+    edge_annotation = edge$annotation[1],
+    evidence_level = edge$evidence_level[1]
+  )
+}
+
+feature_network_edge_role_priority <- function(type) {
+  match(type, c("ISF", "Cross-polarity ISF", "Isotope", "Adduct", "Cross-polarity"), nomatch = 99)
+}
+
+normalize_feature_network_vector <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  out <- rep(0, length(x))
+  ok <- is.finite(x)
+  if (!any(ok)) {
+    return(out)
+  }
+  rng <- range(x[ok], na.rm = TRUE)
+  if (diff(rng) == 0) {
+    out[ok] <- 1
+    return(out)
+  }
+  out[ok] <- (x[ok] - rng[1]) / diff(rng)
+  out
+}
+
+build_recurrent_ion_network <- function(variable_info,
+                                        expression_data = NULL,
+                                        feature_roles = NULL,
+                                        mz_ppm = 10,
+                                        min_instances = 2,
+                                        min_rt_gap = 1,
+                                        neutral_loss_mass = 18.010565,
+                                        neutral_loss_label = "H2O") {
+  if (is.null(variable_info) || nrow(variable_info) == 0) {
+    return(empty_recurrent_ion_network())
+  }
+  info <- as.data.frame(variable_info, stringsAsFactors = FALSE)
+  if (!all(c("variable_id", "mz", "rt") %in% colnames(info))) {
+    return(empty_recurrent_ion_network())
+  }
+  info$variable_id <- as.character(info$variable_id)
+  info$mz <- suppressWarnings(as.numeric(info$mz))
+  info$rt <- suppressWarnings(as.numeric(info$rt))
+  info <- info[is.finite(info$mz) & is.finite(info$rt), , drop = FALSE]
+  if (nrow(info) == 0) {
+    return(empty_recurrent_ion_network())
+  }
+
+  info$mean_area <- NA_real_
+  if (!is.null(expression_data)) {
+    expr <- as.matrix(expression_data)
+    mean_area <- rowMeans(expr, na.rm = TRUE)
+    info$mean_area <- as.numeric(mean_area[match(info$variable_id, names(mean_area))])
+  }
+  info <- info[order(info$mz, info$rt), , drop = FALSE]
+  info$ion_group_id <- NA_character_
+
+  group_idx <- 1L
+  i <- 1L
+  while (i <= nrow(info)) {
+    center <- info$mz[i]
+    mz_tol <- max(center * mz_ppm / 1e6, 0.002)
+    hit <- which(is.na(info$ion_group_id) & abs(info$mz - center) <= mz_tol)
+    group_id <- paste0("ion_", sprintf("%05d", group_idx))
+    info$ion_group_id[hit] <- group_id
+    group_idx <- group_idx + 1L
+    next_unassigned <- which(is.na(info$ion_group_id))
+    if (length(next_unassigned) == 0) break
+    i <- next_unassigned[1]
+  }
+
+  split_info <- split(info, info$ion_group_id)
+  group_rows <- list()
+  keep_ids <- character()
+  for (group_id in names(split_info)) {
+    members <- split_info[[group_id]]
+    rt_range <- range(members$rt, na.rm = TRUE)
+    if (nrow(members) < min_instances || diff(rt_range) < min_rt_gap) {
+      next
+    }
+    keep_ids <- c(keep_ids, group_id)
+    group_rows[[group_id]] <- data.frame(
+      ion_group_id = group_id,
+      center_mz = stats::median(members$mz, na.rm = TRUE),
+      n_instances = nrow(members),
+      rt_min = rt_range[1],
+      rt_max = rt_range[2],
+      parent_resolved_n = 0L,
+      stringsAsFactors = FALSE
+    )
+  }
+  if (length(keep_ids) == 0) {
+    return(empty_recurrent_ion_network())
+  }
+
+  groups <- do.call(rbind, group_rows)
+  feature_roles <- normalize_feature_network_roles(feature_roles %||% data.frame())
+  roles_by_feature <- split(feature_roles, feature_roles$feature_id)
+  nodes <- list()
+  edges <- list()
+  node_idx <- 1L
+  edge_idx <- 1L
+
+  for (group_id in keep_ids) {
+    group <- groups[groups$ion_group_id == group_id, , drop = FALSE]
+    center_id <- paste0("recurrent::", group_id)
+    nodes[[node_idx]] <- data.frame(
+      id = center_id,
+      label = sprintf("m/z %.5f", group$center_mz),
+      group = "Recurrent ion",
+      title = sprintf("Recurrent ion<br>m/z %.5f<br>instances: %d<br>RT %.2f-%.2f",
+                      group$center_mz, group$n_instances, group$rt_min, group$rt_max),
+      ion_group_id = group_id,
+      feature_id = NA_character_,
+      stringsAsFactors = FALSE
+    )
+    node_idx <- node_idx + 1L
+
+    members <- split_info[[group_id]]
+    resolved_n <- 0L
+    for (j in seq_len(nrow(members))) {
+      feature_id <- members$variable_id[j]
+      feature_node_id <- paste0("feature::", feature_id)
+      role <- roles_by_feature[[feature_id]]
+      parent_id <- NA_character_
+      role_text <- "recurrent_ion_instance"
+      if (!is.null(role) && nrow(role) > 0) {
+        role <- role[1, , drop = FALSE]
+        role_text <- role$network_role[1]
+        if (role_text %in% c("isf_fragment_of_parent", "cross_polarity_isf_fragment")) {
+          parent_id <- role$parent_feature_id[1]
+        }
+      }
+
+      nodes[[node_idx]] <- data.frame(
+        id = feature_node_id,
+        label = feature_id,
+        group = if (has_text(parent_id)) "Resolved recurrent instance" else "Unresolved recurrent instance",
+        title = sprintf("%s<br>m/z %.5f<br>RT %.2f<br>role: %s<br>mean area: %.3g",
+                        feature_id, members$mz[j], members$rt[j], role_text, members$mean_area[j]),
+        ion_group_id = group_id,
+        feature_id = feature_id,
+        stringsAsFactors = FALSE
+      )
+      node_idx <- node_idx + 1L
+
+      edges[[edge_idx]] <- data.frame(
+        from = center_id,
+        to = feature_node_id,
+        label = "instance",
+        relation = "recurrent_instance",
+        ion_group_id = group_id,
+        title = "This RT-local feature is an instance of the recurrent ion.",
+        arrows = "to",
+        dashes = FALSE,
+        stringsAsFactors = FALSE
+      )
+      edge_idx <- edge_idx + 1L
+
+      if (has_text(parent_id)) {
+        resolved_n <- resolved_n + 1L
+        parent_node_id <- paste0("parent::", parent_id)
+        if (!any(vapply(nodes, function(x) parent_node_id %in% x$id, logical(1)))) {
+          parent_info <- info[info$variable_id == parent_id, , drop = FALSE]
+          nodes[[node_idx]] <- data.frame(
+            id = parent_node_id,
+            label = parent_id,
+            group = "Resolved parent",
+            title = if (nrow(parent_info) > 0) {
+              sprintf("%s<br>resolved parent<br>m/z %.5f<br>RT %.2f", parent_id, parent_info$mz[1], parent_info$rt[1])
+            } else {
+              sprintf("%s<br>resolved parent", parent_id)
+            },
+            ion_group_id = group_id,
+            feature_id = parent_id,
+            stringsAsFactors = FALSE
+          )
+          node_idx <- node_idx + 1L
+        }
+        edges[[edge_idx]] <- data.frame(
+          from = parent_node_id,
+          to = feature_node_id,
+          label = "ISF source",
+          relation = "resolved_parent_to_isf",
+          ion_group_id = group_id,
+          title = "RT-local network assigned this recurrent ion instance as an ISF of the parent feature.",
+          arrows = "to",
+          dashes = FALSE,
+          stringsAsFactors = FALSE
+        )
+        edge_idx <- edge_idx + 1L
+      }
+    }
+    groups$parent_resolved_n[groups$ion_group_id == group_id] <- resolved_n
+  }
+
+  centers <- stats::setNames(groups$center_mz, groups$ion_group_id)
+  for (group_id in keep_ids) {
+    child_mz <- centers[group_id]
+    parent_hit <- names(centers)[abs(centers - (child_mz + neutral_loss_mass)) <= max((child_mz + neutral_loss_mass) * mz_ppm / 1e6, 0.002)]
+    parent_hit <- setdiff(parent_hit, group_id)
+    if (length(parent_hit) == 0) next
+    source_mz <- centers[parent_hit[1]]
+    virtual_id <- paste0("neutral_loss::", parent_hit[1], "::", group_id)
+    nodes[[node_idx]] <- data.frame(
+      id = virtual_id,
+      label = sprintf("m/z %.5f -> -%s", source_mz, neutral_loss_label),
+      group = "Neutral loss source",
+      title = sprintf("Virtual neutral-loss explanation<br>m/z %.5f - %s -> m/z %.5f", source_mz, neutral_loss_label, child_mz),
+      ion_group_id = group_id,
+      feature_id = NA_character_,
+      stringsAsFactors = FALSE
+    )
+    node_idx <- node_idx + 1L
+    child_members <- split_info[[group_id]]
+    for (feature_id in child_members$variable_id) {
+      edges[[edge_idx]] <- data.frame(
+        from = virtual_id,
+        to = paste0("feature::", feature_id),
+        label = paste0("-", neutral_loss_label),
+        relation = "neutral_loss_virtual_explanation",
+        ion_group_id = group_id,
+        title = "Virtual edge only: this recurrent ion could be explained by neutral loss from the higher recurrent ion.",
+        arrows = "to",
+        dashes = TRUE,
+        stringsAsFactors = FALSE
+      )
+      edge_idx <- edge_idx + 1L
+    }
+  }
+
+  list(
+    groups = groups[order(groups$center_mz), , drop = FALSE],
+    nodes = if (length(nodes) > 0) dplyr::bind_rows(nodes) else empty_recurrent_ion_network()$nodes,
+    edges = if (length(edges) > 0) dplyr::bind_rows(edges) else empty_recurrent_ion_network()$edges
+  )
 }
 
 prefix_feature_network_ids <- function(network, prefix) {
@@ -1373,7 +2013,7 @@ detect_cross_polarity_edges <- function(positive_object,
     cor_cutoff = cor_cutoff
   )
 
-  normalize_feature_network(rbind(same_compound, cross_isf))
+  normalize_feature_network(dplyr::bind_rows(same_compound, cross_isf))
 }
 
 default_cross_polarity_adduct_table <- function(mode) {
@@ -1435,7 +2075,7 @@ detect_cross_neutral_mass_edges <- function(pos,
     }
   }
 
-  normalize_feature_network(do.call(rbind, edges))
+  normalize_feature_network(dplyr::bind_rows(edges))
 }
 
 detect_cross_polarity_isf_edges <- function(pos,
@@ -1525,7 +2165,7 @@ detect_cross_polarity_isf_edges <- function(pos,
     }
   }
 
-  normalize_feature_network(do.call(rbind, edges))
+  normalize_feature_network(dplyr::bind_rows(edges))
 }
 
 make_cross_isf_edge <- function(matches, parent_ids, fragment_ids, annotation, ppm, rt_tolerance) {
