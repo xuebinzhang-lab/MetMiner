@@ -204,7 +204,8 @@ load_metminer_saved_objects <- function(wd) {
     object_pos_network = "06.object_pos_feature_network.rda",
     object_neg_network = "06.object_neg_feature_network.rda",
     object_pos_annotated = "07.object_pos_annotated.rda",
-    object_neg_annotated = "07.object_neg_annotated.rda"
+    object_neg_annotated = "07.object_neg_annotated.rda",
+    annotation_filter_result = "08.annotation_filter_result.rda"
   )
 
   loaded <- list()
@@ -221,7 +222,9 @@ load_metminer_saved_objects <- function(wd) {
     }
 
     obj <- get(obj_names[1], envir = env)
-    if (inherits(obj, "mass_dataset")) {
+    if (identical(slot, "annotation_filter_result") && is.list(obj)) {
+      loaded[[slot]] <- obj
+    } else if (inherits(obj, "mass_dataset")) {
       if (slot == "object_pos_tbl") slot <- "object_pos_raw"
       if (slot == "object_neg_tbl") slot <- "object_neg_raw"
       loaded[[slot]] <- obj

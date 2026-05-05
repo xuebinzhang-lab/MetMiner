@@ -88,4 +88,6 @@ app_server <- function(input, output, session) {
   mod_feature_annotation_server("feature_annotation_1", global_data = global_data, prj_init = prj_init)
   # annotation filtering and redundancy removal
   mod_annotation_filter_server("annotation_filter_1", global_data = global_data, prj_init = prj_init)
+  # AI-assisted annotation review
+  mod_ai_annotation_server("ai_annotation_1", global_data = global_data, prj_init = prj_init)
 }
