@@ -143,6 +143,7 @@ mod_annotation_filter_server <- function(id, global_data, prj_init) {
         "Sub-network records use the feature-network parent and pseudo metabolite ID.\n",
         "Merged-compound records consolidate features sharing compound annotations when the relationship is RT-local or chemically explainable.\n",
         "Same compound, same m/z, cross-RT features are audited with recurrent-ion context; resolved recurrent ISF rows are removed, unresolved recurrent ions are retained for review.\n",
+        "metID adduct and level fields are retained as annotation evidence; adducts come from metID database/adduct matching, not from the feature-network relationship rules.\n",
         "Positive/negative duplicate metabolites are matched by compound key and RT window; higher mean area is retained.\n",
         "Level3/unknown standalone features keep the best-scoring candidate."
       )

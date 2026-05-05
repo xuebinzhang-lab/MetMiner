@@ -153,6 +153,7 @@ metminer_build_network_metabolite_rows <- function(roles, hypothesis, feature_in
 
     compound <- parent$selected_compound[1]
     level <- suppressWarnings(as.integer(parent$metid_level[1]))
+    representative_adduct <- if ("selected_adduct" %in% colnames(parent)) parent$selected_adduct[1] else NA_character_
     semi <- !has_text(compound) || is.na(level) || level > min_high_conf_level
     semi_label <- infer_semi_annotation_label(sub_roles)
 
@@ -168,6 +169,9 @@ metminer_build_network_metabolite_rows <- function(roles, hypothesis, feature_in
       member_features = paste(member_features, collapse = ";"),
       compound_name = if (has_text(compound)) as.character(compound) else semi_label,
       annotation_level = level,
+      representative_adduct = representative_adduct,
+      member_adducts = metminer_collapse_unique_text(sub_roles$selected_adduct),
+      member_annotation_levels = metminer_collapse_unique_text(sub_roles$metid_level),
       confidence_class = if (!semi && level <= min_high_conf_level) "high_confidence_network" else "semi_annotated_network",
       semi_annotation = if (semi) semi_label else NA_character_,
       mz = parent$mz[1],
@@ -200,6 +204,7 @@ metminer_build_single_feature_metabolite_rows <- function(best_feature_annotatio
   info <- feature_info[match(singles$variable_id, feature_info$variable_id), , drop = FALSE]
   level <- suppressWarnings(as.integer(singles$Level))
   compound <- if ("Compound.name" %in% colnames(singles)) singles$Compound.name else NA_character_
+  adduct <- if ("Adduct" %in% colnames(singles)) singles$Adduct else NA_character_
 
   data.frame(
     metabolite_id = singles$variable_id,
@@ -209,6 +214,9 @@ metminer_build_single_feature_metabolite_rows <- function(best_feature_annotatio
     member_features = singles$variable_id,
     compound_name = ifelse(has_text(compound), as.character(compound), "unknown_feature"),
     annotation_level = level,
+    representative_adduct = adduct,
+    member_adducts = adduct,
+    member_annotation_levels = as.character(level),
     confidence_class = ifelse(!is.na(level) & level <= min_high_conf_level, "high_confidence_single", "low_confidence_best_candidate"),
     semi_annotation = NA_character_,
     mz = info$mz,
@@ -222,6 +230,18 @@ metminer_build_single_feature_metabolite_rows <- function(best_feature_annotatio
     source_note = ifelse(!is.na(level) & level <= min_high_conf_level, "single feature level<=threshold", "single feature best level3/unknown candidate"),
     stringsAsFactors = FALSE
   )
+}
+
+metminer_collapse_unique_text <- function(x) {
+  if (is.null(x) || length(x) == 0) {
+    return(NA_character_)
+  }
+  x <- trimws(as.character(x))
+  x <- unique(x[has_text(x)])
+  if (length(x) == 0) {
+    return(NA_character_)
+  }
+  paste(x, collapse = ";")
 }
 
 metminer_ensure_filter_context_columns <- function(candidates) {
@@ -557,8 +577,10 @@ metminer_merge_same_mz_rows <- function(rows, mz_ppm = 10) {
     merged_row <- rows[best, , drop = FALSE]
     all_features <- unique(unlist(
       strsplit(paste(rows$member_features[idx], collapse = ";"), ";", fixed = TRUE),
-      use.names = FALSE))
+        use.names = FALSE))
     merged_row$member_features <- paste(all_features, collapse = ";")
+    merged_row$member_adducts <- metminer_collapse_unique_text(rows$member_adducts[idx])
+    merged_row$member_annotation_levels <- metminer_collapse_unique_text(rows$member_annotation_levels[idx])
     merged_row$n_features <- length(all_features)
     merged_row$record_type <- ifelse(
       merged_row$record_type == "sub_network", "sub_network",
@@ -622,6 +644,8 @@ metminer_merge_mass_difference_rows <- function(rows, mz_ppm = 10) {
                  ";", fixed = TRUE),
         use.names = FALSE))
       row_i$member_features <- paste(all_features, collapse = ";")
+      row_i$member_adducts <- metminer_collapse_unique_text(rows$member_adducts[c(i, which(merged))])
+      row_i$member_annotation_levels <- metminer_collapse_unique_text(rows$member_annotation_levels[c(i, which(merged))])
       row_i$n_features <- length(all_features)
       row_i$record_type <- ifelse(
         row_i$record_type == "sub_network", "sub_network",
@@ -667,6 +691,8 @@ metminer_merge_singles_into_networks <- function(net_rows, single_rows, mz_ppm) 
                          collapse = ";"), ";", fixed = TRUE),
           use.names = FALSE))
         net_rows$member_features[i] <- paste(all_features, collapse = ";")
+        net_rows$member_adducts[i] <- metminer_collapse_unique_text(c(net_rows$member_adducts[i], single_rows$member_adducts[j]))
+        net_rows$member_annotation_levels[i] <- metminer_collapse_unique_text(c(net_rows$member_annotation_levels[i], single_rows$member_annotation_levels[j]))
         net_rows$n_features[i] <- length(all_features)
         net_rows$source_note[i] <- paste0(net_rows$source_note[i],
           sprintf(" | +single %s (Δm=%.4f,%s)", single_rows$metabolite_id[j], delta, rel))
