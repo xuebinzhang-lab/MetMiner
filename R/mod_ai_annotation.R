@@ -173,9 +173,21 @@ mod_ai_annotation_ui <- function(id) {
             ),
             selected = "openai"
           ),
-          textInput(ns("model"), "Model", value = metminer_ai_provider_defaults("openai")$model),
+          selectizeInput(
+            ns("model"),
+            "Model",
+            choices = metminer_ai_provider_model_choices("openai"),
+            selected = metminer_ai_provider_defaults("openai")$model,
+            options = list(create = TRUE)
+          ),
           passwordInput(ns("api_key"), "API Key"),
           textInput(ns("base_url"), "API Endpoint", value = metminer_ai_provider_defaults("openai")$base_url),
+          selectInput(
+            ns("language"),
+            "Chat Language",
+            choices = metminer_ai_language_choices(),
+            selected = "en"
+          ),
           sliderInput(ns("temperature"), "Temperature", min = 0, max = 1.5, value = 0.3, step = 0.05),
           div(
             class = "d-grid gap-2 mb-3",
@@ -218,8 +230,7 @@ mod_ai_annotation_ui <- function(id) {
         div(
           class = "p-3 ai-chat-page",
           div(class = "ai-chat-header", tags$strong("Annotation Review Chat")),
-            div(class = "ai-chat-scroll", uiOutput(ns("chat_history"))),
-            uiOutput(ns("busy_indicator")),
+            div(id = ns("chat_scroll"), class = "ai-chat-scroll", uiOutput(ns("chat_history"))),
             div(
               class = "ai-composer",
               div(
@@ -252,14 +263,48 @@ mod_ai_annotation_ui <- function(id) {
 #' @noRd
 mod_ai_annotation_server <- function(id, global_data, prj_init) {
   moduleServer(id, function(input, output, session) {
+    ns <- session$ns
     chat <- reactiveVal(list(
       list(role = "system", content = "Ready. Configure an LLM provider, enter a compound name, then click Review.")
     ))
     last_evidence <- reactiveVal(NULL)
     connection_status <- reactiveVal("No API test yet.")
     ai_busy <- reactiveVal(FALSE)
+    ai_status <- reactiveVal(NULL)
     api_test_ok <- reactiveVal(FALSE)
     loaded_config_provider <- reactiveVal(NULL)
+
+    start_ai_request <- function(title = "AI Annotation Review", message = "Preparing evidence...", value = 5) {
+      ai_busy(TRUE)
+      ai_status(list(title = title, message = message, value = value))
+    }
+
+    update_ai_progress <- function(value, message = NULL) {
+      current_status <- shiny::isolate(ai_status())
+      ai_status(list(
+        title = current_status$title %||% "AI Annotation Review",
+        message = message %||% current_status$message %||% "Working...",
+        value = value
+      ))
+    }
+
+    finish_ai_request <- function(answer = NULL, value = 100, message = "Done.") {
+      if (!is.null(answer)) {
+        append_chat(chat, "assistant", answer)
+      }
+      update_ai_progress(value, message)
+      ai_status(NULL)
+      ai_busy(FALSE)
+    }
+
+    scroll_chat_to_bottom <- function() {
+      shiny::withReactiveDomain(session, {
+        shinyjs::runjs(sprintf(
+          "setTimeout(function(){var el=document.getElementById('%s'); if(el){el.scrollTop=el.scrollHeight;}}, 40);",
+          ns("chat_scroll")
+        ))
+      })
+    }
 
     session$onFlushed(function() {
       cfg <- metminer_ai_load_config()
@@ -268,9 +313,16 @@ mod_ai_annotation_server <- function(id, global_data, prj_init) {
       }
       loaded_config_provider(cfg$provider %||% "openai")
       updateSelectInput(session, "provider", selected = cfg$provider %||% "openai")
-      updateTextInput(session, "model", value = cfg$model %||% metminer_ai_provider_defaults(cfg$provider)$model)
+      updateSelectizeInput(
+        session,
+        "model",
+        choices = metminer_ai_provider_model_choices(cfg$provider %||% "openai"),
+        selected = cfg$model %||% metminer_ai_provider_defaults(cfg$provider)$model,
+        server = TRUE
+      )
       updateTextInput(session, "api_key", value = cfg$api_key %||% "")
       updateTextInput(session, "base_url", value = cfg$base_url %||% metminer_ai_provider_defaults(cfg$provider)$base_url)
+      updateSelectInput(session, "language", selected = cfg$language %||% "en")
       updateSliderInput(session, "temperature", value = cfg$temperature %||% 0.3)
       connection_status(sprintf("Loaded local LLM config: %s / %s", cfg$provider %||% "openai", cfg$model %||% ""))
     }, once = TRUE)
@@ -282,7 +334,13 @@ mod_ai_annotation_server <- function(id, global_data, prj_init) {
       }
       api_test_ok(FALSE)
       defaults <- metminer_ai_provider_defaults(input$provider)
-      updateTextInput(session, "model", value = defaults$model)
+      updateSelectizeInput(
+        session,
+        "model",
+        choices = metminer_ai_provider_model_choices(input$provider),
+        selected = defaults$model,
+        server = TRUE
+      )
       updateTextInput(session, "base_url", value = defaults$base_url)
     }, ignoreInit = TRUE)
 
@@ -304,34 +362,35 @@ mod_ai_annotation_server <- function(id, global_data, prj_init) {
 
     output$connection_status <- renderText(connection_status())
 
-    output$busy_indicator <- renderUI({
-      if (!isTRUE(ai_busy())) return(NULL)
-      div(
-        class = "ai-busy",
-        div(
-          class = "d-flex align-items-center gap-2",
-          tags$div(class = "spinner-border spinner-border-sm", role = "status"),
-          tags$span("AI is reasoning over MS1/MS2, feature-network, recurrent-ion and annotation evidence"),
-          tags$span(class = "ai-thinking-dots", tags$span(), tags$span(), tags$span())
-        ),
-        div(class = "ai-progress")
-      )
-    })
-
     output$chat_history <- renderUI({
       msgs <- chat()
       if (length(msgs) == 0) return(NULL)
+      rendered_msgs <- lapply(msgs, function(msg) {
+        role <- msg$role %||% "assistant"
+        css <- switch(role,
+                      user = "ai-message ai-user",
+                      system = "ai-message ai-system",
+                      "ai-message ai-assistant")
+        tags$div(class = css, markdown_to_html(msg$content %||% ""))
+      })
+      status <- ai_status()
+      if (isTRUE(ai_busy()) && !is.null(status)) {
+        rendered_msgs[[length(rendered_msgs) + 1L]] <- tags$div(
+          class = "ai-message ai-assistant",
+          tags$div(class = "fw-semibold", status$title %||% "AI Annotation Review"),
+          tags$div(class = "text-muted", status$message %||% "Working..."),
+          tags$div(class = "ai-thinking-dots", tags$span(), tags$span(), tags$span()),
+          tags$div(class = "ai-progress mt-2")
+        )
+      }
       tags$div(
-        lapply(msgs, function(msg) {
-          role <- msg$role %||% "assistant"
-          css <- switch(role,
-                        user = "ai-message ai-user",
-                        system = "ai-message ai-system",
-                        "ai-message ai-assistant")
-          tags$div(class = css, markdown_to_html(msg$content %||% ""))
-        })
+        rendered_msgs
       )
     })
+
+    observeEvent(list(chat(), ai_status()), {
+      scroll_chat_to_bottom()
+    }, ignoreInit = TRUE)
 
     observeEvent(input$clear_chat, {
       chat(list(list(role = "system", content = "Chat cleared.")))
@@ -399,7 +458,8 @@ mod_ai_annotation_server <- function(id, global_data, prj_init) {
           model = input$model,
           api_key = input$api_key,
           base_url = input$base_url,
-          temperature = input$temperature
+          temperature = input$temperature,
+          language = input$language
         )
         connection_status(paste("Saved local LLM config:", path))
         shinyalert::shinyalert("Config Saved", paste("Local configuration saved to:", path), type = "success")
@@ -409,110 +469,267 @@ mod_ai_annotation_server <- function(id, global_data, prj_init) {
     })
 
     observeEvent(input$review_compound, {
-      req(input$compound_query, input$api_key)
       if (isTRUE(ai_busy())) {
         return()
       }
-      ai_busy(TRUE)
-      shinyjs::disable("review_compound")
-      shinyjs::disable("send_message")
-      shinyjs::disable("test_api")
-      on.exit({
-        ai_busy(FALSE)
-        shinyjs::enable("review_compound")
-        shinyjs::enable("send_message")
-        shinyjs::enable("test_api")
-      }, add = TRUE)
-      append_chat(chat, "user", paste("Review annotation:", input$compound_query, "\n", input$user_message %||% ""))
-      append_chat(chat, "system", "Preparing evidence bundle and waiting for the LLM response...")
-      tryCatch({
-        paper_search <- run_paper_search_for_request(
-          input = input,
-          chat = chat,
-          query = input$compound_query,
-          trigger_text = input$user_message
-        )
+
+      # Capture inputs for the async future (Shiny inputs are not safe inside futures)
+      provider   <- input$provider
+      model      <- input$model
+      api_key    <- input$api_key
+      base_url   <- input$base_url
+      temperature <- input$temperature
+      lc_cond    <- input$lc_conditions
+      language   <- input$language
+      user_msg   <- input$user_message
+      compound_q <- input$compound_query
+      max_feat   <- input$max_features
+      ms2_n      <- input$ms2_top_n
+      positive_object <- global_data$object_pos_annotated %||% global_data$object_pos_network
+      negative_object <- global_data$object_neg_annotated %||% global_data$object_neg_network
+      filter_result <- global_data$annotation_filter_result
+      if (!nzchar(trimws(api_key %||% ""))) {
+        append_chat(chat, "system", "Please enter an API key before sending the request.")
+        return()
+      }
+      if (!nzchar(trimws(compound_q %||% ""))) {
+        append_chat(chat, "system", "Please enter a compound or feature query before clicking Review.")
+        return()
+      }
+      start_ai_request("AI Annotation Review", "Preparing evidence bundle...", 8)
+
+      append_chat(chat, "user", paste("Review annotation:", compound_q, "\n", user_msg %||% ""))
+      append_chat(chat, "system", "Preparing evidence bundle...")
+      later::later(function() {
+
+      # Gather evidence synchronously (needs Shiny reactives)
+      paper_search <- tryCatch(
+        run_paper_search_for_request(input = input, chat = chat, query = compound_q, trigger_text = user_msg),
+        error = function(e) list(status = "error", message = e$message)
+      )
+      update_ai_progress(25, "Collecting annotation, MS1/MS2 and feature-network evidence...")
+      if (metminer_ai_should_use_paper_search(input, user_msg)) {
         updateCheckboxInput(session, "include_paper_search", value = FALSE)
-        evidence <- metminer_ai_collect_evidence(
-          compound_name = input$compound_query,
-          positive_object = global_data$object_pos_annotated %||% global_data$object_pos_network,
-          negative_object = global_data$object_neg_annotated %||% global_data$object_neg_network,
-          filter_result = global_data$annotation_filter_result,
-          max_features = input$max_features,
-          ms2_top_n = input$ms2_top_n,
+      }
+
+      evidence <- tryCatch(
+        metminer_ai_collect_evidence(
+          compound_name = compound_q,
+          positive_object = positive_object,
+          negative_object = negative_object,
+          filter_result = filter_result,
+          max_features = max_feat,
+          ms2_top_n = ms2_n,
           paper_search = paper_search
-        )
-        last_evidence(evidence)
-        prompt <- metminer_ai_build_review_user_prompt(
-          compound_name = input$compound_query,
-          evidence_bundle = evidence,
-          lc_conditions = input$lc_conditions,
-          user_question = input$user_message
-        )
-        append_chat(chat, "system", sprintf("Evidence bundle prepared: %d feature(s), %d final row(s), %d audit row(s).",
-                                            evidence$feature_count,
-                                            nrow(evidence$nonredundant_rows),
-                                            nrow(evidence$redundancy_audit_rows)))
-        answer <- call_ai_reviewer(input, prompt)
-        append_chat(chat, "assistant", answer)
-      }, error = function(e) {
-        append_chat(chat, "assistant", paste("Review failed:", e$message))
-        shinyalert::shinyalert("AI Review Failed", e$message, type = "error")
-      })
+        ),
+        error = function(e) list(feature_count = 0, nonredundant_rows = data.frame(), redundancy_audit_rows = data.frame(), error = e$message)
+      )
+      last_evidence(evidence)
+
+      append_chat(chat, "system", sprintf("Evidence bundle prepared: %d feature(s), %d final row(s), %d audit row(s).",
+                                          evidence$feature_count,
+                                          nrow(evidence$nonredundant_rows %||% data.frame()),
+                                          nrow(evidence$redundancy_audit_rows %||% data.frame())))
+      update_ai_progress(45, "Building cacheable LLM prompt...")
+
+      # Build cache-optimised messages: evidence as static prefix, question as variable suffix
+      evidence_json <- metminer_ai_safe_json(evidence)
+      messages <- metminer_ai_build_cacheable_messages(
+        system_prompt = metminer_ai_system_prompt(language, mode = "review"),
+        evidence_json = evidence_json,
+        compound_name = compound_q,
+        lc_conditions = lc_cond,
+        user_question = user_msg,
+        language = language,
+        mode = "review"
+      )
+
+      # Async LLM call
+      fut <- tryCatch(future::future(
+        call_llm_async(provider, model, api_key, base_url, temperature, messages),
+        packages = c("httr2", "jsonlite"),
+        globals = list(
+          call_llm_async = call_llm_async,
+          provider = provider,
+          model = model,
+          api_key = api_key,
+          base_url = base_url,
+          temperature = temperature,
+          language = language,
+          messages = messages
+        ),
+        seed = TRUE
+      ), error = function(e) e)
+
+      if (inherits(fut, "error")) {
+        finish_ai_request(paste("Review failed:", fut$message), value = 100, message = "Failed.")
+        shinyalert::shinyalert("AI Review Failed", fut$message, type = "error")
+        return()
+      }
+      update_ai_progress(65, "Waiting for LLM response...")
+
+      request_started_at <- Sys.time()
+      max_wait_sec <- 360
+      poll_result <- function() {
+        if (future::resolved(fut)) {
+          answer <- tryCatch(future::value(fut), error = function(e) paste("LLM call failed:", e$message))
+          finish_ai_request(answer, value = 100, message = "AI response received.")
+        } else if (as.numeric(difftime(Sys.time(), request_started_at, units = "secs")) > max_wait_sec) {
+          finish_ai_request(
+            sprintf("LLM call timed out after %d seconds. Please try a smaller evidence scope, a faster model, or a higher provider timeout.", max_wait_sec),
+            value = 100,
+            message = "Timed out."
+          )
+        } else {
+          update_ai_progress(80, "LLM is reasoning. This may take a while for thinking models...")
+          later::later(poll_result, 0.5)
+        }
+      }
+      later::later(poll_result, 0.2)
+      }, 0.05)
     })
 
     observeEvent(input$send_message, {
-      req(input$user_message, input$api_key)
       if (isTRUE(ai_busy())) {
         return()
       }
-      ai_busy(TRUE)
-      shinyjs::disable("review_compound")
-      shinyjs::disable("send_message")
-      shinyjs::disable("test_api")
-      on.exit({
-        ai_busy(FALSE)
-        shinyjs::enable("review_compound")
-        shinyjs::enable("send_message")
-        shinyjs::enable("test_api")
-      }, add = TRUE)
-      append_chat(chat, "user", input$user_message)
-      append_chat(chat, "system", "Waiting for the LLM response...")
-      tryCatch({
-        evidence <- last_evidence()
-        if (!is.null(evidence) && metminer_ai_should_use_paper_search(input, input$user_message)) {
-          evidence$literature_evidence <- run_paper_search_for_request(
-            input = input,
-            chat = chat,
-            query = evidence$query %||% input$compound_query %||% input$user_message,
-            trigger_text = input$user_message
+
+      # Capture all inputs for the async future
+      provider   <- input$provider
+      model      <- input$model
+      api_key    <- input$api_key
+      base_url   <- input$base_url
+      temperature <- input$temperature
+      lc_cond    <- input$lc_conditions
+      language   <- input$language
+      user_msg   <- input$user_message
+      compound_q <- input$compound_query
+      if (!nzchar(trimws(api_key %||% ""))) {
+        append_chat(chat, "system", "Please enter an API key before sending the request.")
+        return()
+      }
+      if (!nzchar(trimws(user_msg %||% ""))) {
+        append_chat(chat, "system", "Please enter a message before clicking Send.")
+        return()
+      }
+      start_ai_request("AI Chat", "Preparing follow-up question...", 10)
+
+      append_chat(chat, "user", user_msg)
+      append_chat(chat, "system", "Reasoning...")
+      later::later(function() {
+
+      # Gather evidence + optional paper search synchronously
+      evidence <- shiny::isolate(last_evidence())
+      paper_requested <- metminer_ai_should_use_paper_search(input, user_msg)
+      if (isTRUE(paper_requested)) {
+        if (is.null(evidence)) {
+          evidence <- list(
+            query = metminer_ai_clean_paper_query(compound_q %||% user_msg),
+            literature_evidence = list(status = "not_requested"),
+            feature_count = 0,
+            nonredundant_rows = data.frame(),
+            redundancy_audit_rows = data.frame(),
+            raw_annotation_candidates = data.frame(),
+            feature_evidence = data.frame()
           )
-          updateCheckboxInput(session, "include_paper_search", value = FALSE)
+        }
+        prev_lit <- evidence$literature_evidence
+        if (is.null(prev_lit) || !isTRUE(prev_lit$status == "ok") || length(prev_lit$papers %||% list()) == 0) {
+          evidence$literature_evidence <- tryCatch(
+            run_paper_search_for_request(input = input, chat = chat,
+                                         query = metminer_ai_clean_paper_query(evidence$query %||% compound_q %||% user_msg),
+                                         trigger_text = user_msg),
+            error = function(e) list(status = "error", message = e$message)
+          )
           last_evidence(evidence)
         }
-        prompt <- if (!is.null(evidence)) {
-          metminer_ai_build_review_user_prompt(
-            compound_name = evidence$query,
-            evidence_bundle = evidence,
-            lc_conditions = input$lc_conditions,
-            user_question = input$user_message
+        updateCheckboxInput(session, "include_paper_search", value = FALSE)
+      }
+      update_ai_progress(40, "Building chat context and evidence prefix...")
+
+      # Build cache-optimised messages: identical evidence prefix → DeepSeek cache hit
+      # Chat context is summarised to a short snippet so the variable suffix stays small
+      ev <- shiny::isolate(last_evidence())
+      evidence_json <- if (!is.null(ev)) {
+        metminer_ai_safe_json(ev)
+      } else {
+        "{}"
+      }
+      current_chat <- shiny::isolate(chat())
+      chat_context <- if (length(current_chat) > 0) {
+        metminer_ai_summarize_chat_context(current_chat)
+      } else {
+        NULL
+      }
+
+      messages <- metminer_ai_build_cacheable_messages(
+        system_prompt = metminer_ai_system_prompt(language, mode = "chat"),
+        evidence_json = evidence_json,
+        compound_name = ev$query %||% compound_q,
+        lc_conditions = lc_cond,
+        user_question = user_msg,
+        chat_context = chat_context,
+        language = language,
+        mode = "chat"
+      )
+
+      # Async LLM call
+      fut <- tryCatch(future::future(
+        call_llm_async(provider, model, api_key, base_url, temperature, messages),
+        packages = c("httr2", "jsonlite"),
+        globals = list(
+          call_llm_async = call_llm_async,
+          provider = provider,
+          model = model,
+          api_key = api_key,
+          base_url = base_url,
+          temperature = temperature,
+          language = language,
+          messages = messages
+        ),
+        seed = TRUE
+      ), error = function(e) e)
+
+      if (inherits(fut, "error")) {
+        finish_ai_request(paste("Message failed:", fut$message), value = 100, message = "Failed.")
+        return()
+      }
+      update_ai_progress(70, "Waiting for LLM response...")
+
+      request_started_at <- Sys.time()
+      max_wait_sec <- 360
+      poll_result <- function() {
+        if (future::resolved(fut)) {
+          answer <- tryCatch(future::value(fut), error = function(e) paste("LLM call failed:", e$message))
+          finish_ai_request(answer, value = 100, message = "AI response received.")
+        } else if (as.numeric(difftime(Sys.time(), request_started_at, units = "secs")) > max_wait_sec) {
+          finish_ai_request(
+            sprintf("LLM call timed out after %d seconds. Please try a shorter question, a faster model, or a higher provider timeout.", max_wait_sec),
+            value = 100,
+            message = "Timed out."
           )
         } else {
-          input$user_message
+          update_ai_progress(85, "LLM is reasoning. This may take a while for thinking models...")
+          later::later(poll_result, 0.5)
         }
-        answer <- call_ai_reviewer(input, prompt)
-        append_chat(chat, "assistant", answer)
-      }, error = function(e) {
-        append_chat(chat, "assistant", paste("Message failed:", e$message))
-      })
+      }
+      later::later(poll_result, 0.2)
+      }, 0.05)
     })
   })
 }
 
 metminer_ai_should_use_paper_search <- function(input, trigger_text = "") {
   trigger_text <- tolower(trigger_text %||% "")
-  isTRUE(input$include_paper_search) ||
-    grepl("(^|\\s)@(agent|paper|mcp|literature)\\b", trigger_text, perl = TRUE)
+  isTRUE(shiny::isolate(input$include_paper_search)) ||
+    grepl("@(agent|paper|mcp|literature)", trigger_text, perl = TRUE)
+}
+
+metminer_ai_clean_paper_query <- function(x) {
+  x <- trimws(x %||% "")
+  x <- gsub("@(agent|paper|mcp|literature)", "", x, ignore.case = TRUE, perl = TRUE)
+  x <- gsub("\\s+", " ", x, perl = TRUE)
+  trimws(x)
 }
 
 run_paper_search_for_request <- function(input, chat, query, trigger_text = "") {
@@ -521,14 +738,14 @@ run_paper_search_for_request <- function(input, chat, query, trigger_text = "") 
   }
   append_chat(chat, "system", sprintf(
     "Searching literature sources: %s...",
-    paste(input$paper_sources %||% character(), collapse = ", ")
+    paste(shiny::isolate(input$paper_sources) %||% character(), collapse = ", ")
   ))
   paper_search <- tryCatch(
     metminer_ai_search_papers(
       query = query,
-      sources = input$paper_sources,
-      max_results_per_source = input$paper_max_results,
-      cli = input$paper_search_cli
+      sources = shiny::isolate(input$paper_sources),
+      max_results_per_source = shiny::isolate(input$paper_max_results),
+      cli = shiny::isolate(input$paper_search_cli)
     ),
     error = function(e) list(status = "error", message = e$message)
   )
@@ -544,25 +761,100 @@ run_paper_search_for_request <- function(input, chat, query, trigger_text = "") 
   paper_search
 }
 
-append_chat <- function(chat, role, content) {
-  msgs <- chat()
-  msgs[[length(msgs) + 1L]] <- list(role = role, content = content)
-  chat(msgs)
+call_llm_async <- function(provider, model, api_key, base_url, temperature, messages) {
+  first_non_empty <- function(x, y) {
+    if (is.null(x) || length(x) == 0 || !nzchar(trimws(as.character(x)[1]))) y else as.character(x)[1]
+  }
+  msg_field <- function(x, name) {
+    value <- x[[name]]
+    if (is.null(value) || length(value) == 0) "" else as.character(value)[1]
+  }
+  provider <- first_non_empty(provider, "openai")
+  defaults <- list(
+    openai = list(model = "gpt-4o-mini", style = "openai"),
+    deepseek = list(model = "deepseek-v4-flash", style = "openai"),
+    qwen = list(model = "qwen-plus", style = "openai"),
+    kimi = list(model = "moonshot-v1-8k", style = "openai"),
+    grok = list(model = "grok-2-latest", style = "openai"),
+    gemini = list(model = "gemini-1.5-flash", style = "gemini")
+  )
+  default <- defaults[[provider]]
+  if (is.null(default)) default <- defaults$openai
+  model <- first_non_empty(model, default$model)
+  base_url <- first_non_empty(base_url, "")
+  api_key <- first_non_empty(api_key, "")
+  if (!nzchar(api_key)) stop("API key is required.", call. = FALSE)
+
+  if (identical(default$style, "gemini")) {
+    endpoint <- paste0(sub("/+$", "", base_url), "/models/", model, ":generateContent")
+    roles <- vapply(messages, msg_field, character(1), name = "role")
+    system_text <- paste(vapply(messages[roles == "system"], msg_field, character(1), name = "content"), collapse = "\n")
+    user_text <- paste(vapply(messages[roles != "system"], msg_field, character(1), name = "content"), collapse = "\n\n")
+    body <- list(
+      systemInstruction = list(parts = list(list(text = system_text))),
+      contents = list(list(role = "user", parts = list(list(text = user_text)))),
+      generationConfig = list(temperature = as.numeric(temperature))
+    )
+    resp <- tryCatch(
+      httr2::req_perform(
+        httr2::req_timeout(
+          httr2::req_body_json(
+            httr2::req_method(
+              httr2::req_url_query(httr2::request(endpoint), key = api_key),
+              "POST"
+            ),
+            body,
+            auto_unbox = TRUE
+          ),
+          300
+        )
+      ),
+      error = function(e) stop("HTTP error: ", e$message, call. = FALSE)
+    )
+    parsed <- httr2::resp_body_json(resp, simplifyVector = FALSE)
+    content <- parsed$candidates[[1]]$content$parts[[1]]$text
+    if (is.null(content)) content <- ""
+    if (!nzchar(trimws(content))) stop("LLM returned empty response.", call. = FALSE)
+    return(content)
+  }
+
+  body_json <- jsonlite::toJSON(
+    list(model = model, messages = messages, temperature = as.numeric(temperature)),
+    auto_unbox = TRUE,
+    na = "null"
+  )
+  resp <- tryCatch(
+    httr2::req_perform(
+      httr2::req_retry(
+        httr2::req_timeout(
+          httr2::req_body_raw(
+            httr2::req_headers(
+              httr2::req_method(httr2::request(base_url), "POST"),
+              Authorization = paste("Bearer", api_key),
+              `Content-Type` = "application/json"
+            ),
+            body_json,
+            "application/json"
+          ),
+          300
+        ),
+        max_tries = 2,
+        max_seconds = 300
+      )
+    ),
+    error = function(e) stop("HTTP error: ", e$message, call. = FALSE)
+  )
+  parsed <- httr2::resp_body_json(resp, simplifyVector = FALSE)
+  content <- parsed$choices[[1]]$message$content
+  if (is.null(content)) content <- ""
+  if (!nzchar(trimws(content))) stop("LLM returned empty response.", call. = FALSE)
+  content
 }
 
-call_ai_reviewer <- function(input, user_prompt) {
-  messages <- list(
-    list(role = "system", content = metminer_ai_system_prompt()),
-    list(role = "user", content = user_prompt)
-  )
-  metminer_ai_chat(
-    provider = input$provider,
-    model = input$model,
-    api_key = input$api_key,
-    messages = messages,
-    temperature = input$temperature,
-    base_url = input$base_url
-  )
+append_chat <- function(chat, role, content) {
+  msgs <- shiny::isolate(chat())
+  msgs[[length(msgs) + 1L]] <- list(role = role, content = content)
+  chat(msgs)
 }
 
 markdown_to_html <- function(x) {

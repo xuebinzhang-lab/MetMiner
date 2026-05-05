@@ -1,6 +1,6 @@
 Package: MetMiner
 Title: Robust Plant Metabolomics and ISF Deconvolution
-Version: 0.1.0.9003
+Version: 0.1.0.9004
 Authors@R: 
     c(person(given = "Xiao",
              family = "Wang",
@@ -12,7 +12,7 @@ Authors@R:
 Author: Xiao Wang [aut, cre],
     Codex [ctb]
 Maintainer: Xiao Wang <shawnwang2016@126.com>
-Description: An Agentic, AI-Driven Platform for Robust Plant Metabolomics and ISF Deconvolution.
+Description: A Shiny platform for robust plant LC-MS metabolomics, feature-network ISF deconvolution, non-redundant annotation filtering, and AI-assisted annotation review.
 License: MIT + file LICENSE
 Depends:
     R (>= 4.1.0)
@@ -31,6 +31,7 @@ Imports:
     httr2,
     igraph,
     jsonlite,
+    later,
     magrittr,
     markdown,
     massdbbuildin,

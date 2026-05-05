@@ -14,7 +14,7 @@ metminer_ai_provider_defaults <- function(provider) {
       api_style = "gemini"
     ),
     deepseek = list(
-      model = "deepseek-chat",
+      model = "deepseek-v4-flash",
       base_url = "https://api.deepseek.com/chat/completions",
       api_style = "openai"
     ),
@@ -35,6 +35,69 @@ metminer_ai_provider_defaults <- function(provider) {
     )
   )
   defaults[[provider]] %||% defaults$openai
+}
+
+metminer_ai_provider_model_choices <- function(provider) {
+  provider <- provider %||% "openai"
+  choices <- list(
+    openai = c(
+      "GPT-5.4 mini" = "gpt-5.4-mini",
+      "GPT-5.4" = "gpt-5.4",
+      "GPT-5.3 Codex" = "gpt-5.3-codex",
+      "GPT-4o mini (legacy)" = "gpt-4o-mini"
+    ),
+    gemini = c(
+      "Gemini 3.0 Pro" = "gemini-3.0-pro",
+      "Gemini 3.0 Flash" = "gemini-3.0-flash",
+      "Gemini 2.5 Pro" = "gemini-2.5-pro",
+      "Gemini 2.5 Flash" = "gemini-2.5-flash"
+    ),
+    deepseek = c(
+      "DeepSeek V4 Flash" = "deepseek-v4-flash",
+      "DeepSeek V4 Pro" = "deepseek-v4-pro",
+      "DeepSeek Chat (legacy, deprecated 2026-07-24)" = "deepseek-chat",
+      "DeepSeek Reasoner (legacy, deprecated 2026-07-24)" = "deepseek-reasoner"
+    ),
+    qwen = c(
+      "Qwen Plus" = "qwen-plus",
+      "Qwen Max" = "qwen-max",
+      "Qwen Turbo" = "qwen-turbo"
+    ),
+    kimi = c(
+      "Moonshot v1 8K" = "moonshot-v1-8k",
+      "Moonshot v1 32K" = "moonshot-v1-32k",
+      "Moonshot v1 128K" = "moonshot-v1-128k"
+    ),
+    grok = c(
+      "Grok 2 Latest" = "grok-2-latest",
+      "Grok 2 Vision Latest" = "grok-2-vision-latest"
+    )
+  )
+  choices[[provider]] %||% choices$openai
+}
+
+metminer_ai_language_choices <- function() {
+  c(
+    "简体中文" = "zh-CN",
+    "English" = "en",
+    "日本語" = "ja",
+    "한국어" = "ko",
+    "Deutsch" = "de",
+    "Français" = "fr",
+    "Español" = "es",
+    "Português" = "pt",
+    "Italiano" = "it"
+  )
+}
+
+metminer_ai_language_label <- function(language) {
+  choices <- metminer_ai_language_choices()
+  language <- language %||% "en"
+  label <- names(choices)[match(language, unname(choices))]
+  if (is.null(label) || length(label) == 0 || is.na(label) || !nzchar(label)) {
+    return("English")
+  }
+  label
 }
 
 metminer_ai_paper_sources <- function() {
@@ -91,7 +154,8 @@ metminer_ai_save_config <- function(provider,
                                     model,
                                     api_key,
                                     base_url,
-                                    temperature = 0.3) {
+                                    temperature = 0.3,
+                                    language = "en") {
   if (!isTRUE(metminer_ai_config_persistence_available())) {
     stop("Local AI configuration persistence is disabled in server environments.", call. = FALSE)
   }
@@ -101,6 +165,7 @@ metminer_ai_save_config <- function(provider,
     api_key = api_key,
     base_url = base_url,
     temperature = as.numeric(temperature),
+    language = language %||% "en",
     os = Sys.info()[["sysname"]],
     updated_at = as.character(Sys.time())
   )
@@ -110,23 +175,40 @@ metminer_ai_save_config <- function(provider,
   path
 }
 
-metminer_ai_system_prompt <- function() {
-  paste(
+metminer_ai_system_prompt <- function(language = "en", mode = c("review", "chat")) {
+  mode <- match.arg(mode)
+  language_label <- metminer_ai_language_label(language)
+  base_prompt <- c(
     "You are an LC-MS plant metabolomics annotation reviewer.",
+    paste0("Write the final answer in ", language_label, ". All explanatory prose and section headings must use this language. Keep compound names, feature IDs, adducts, database IDs, DOIs, and literature references unchanged."),
     "You must judge metabolite annotation credibility from the provided evidence bundle, not from compound names alone.",
     "Prioritize annotation level, metID adduct evidence, MS1 m/z/RT, MS2 fragments, feature-network role, recurrent-ion status, and non-redundancy audit fields.",
     "Treat metID adducts as database/adduct-dictionary annotation evidence, not as feature-network relationships.",
     "If literature_evidence is provided, use it only as contextual support for known biology, plant occurrence, metabolism, and analytical reports; do not let literature override weak spectral evidence.",
     "Never invent papers, authors, years, journals, or DOIs. You may cite only papers present in literature_evidence.papers.",
+    "When a user asks for literature via @agent, @paper, @mcp, or @literature, literature claims must be based only on literature_evidence.papers. If paper search failed or returned no papers, say that no literature evidence was retrieved and do not cite or imply unsourced papers.",
     "When citing literature in the review body, use author-year style such as Wang et al., 2024. If author metadata is unavailable, cite the source and title briefly.",
-    "Every cited paper must appear in a final References section. Format references as: FirstAuthor., SecondAuthor., et al., Paper title, Year, Journal/source, DOI. If DOI is missing, write DOI not available in paper-search result.",
+    "Every cited paper must appear in a final References section. Format references as: FirstAuthor., SecondAuthor., et al., Paper title, Year, Journal/source, DOI. Use the journal field when present; otherwise use source. If DOI is missing, write DOI not available in paper-search result.",
     "Before using a DOI, verify it is exactly present in the literature_evidence entry. Do not infer or fabricate missing DOI values.",
     "A same compound name appearing at multiple RTs is suspicious unless explained by isomers or explicit chromatographic evidence.",
     "A feature marked as resolved_recurrent_isf or suspected_interference is likely a fragment/interference candidate.",
-    "If evidence is insufficient, say so clearly.",
+    "If evidence is insufficient, say so clearly."
+  )
+  mode_prompt <- if (identical(mode, "chat")) {
+    c(
+      "This is a follow-up chat turn. Answer the user's current question directly.",
+      "Do not repeat the previous full annotation review unless the user explicitly asks for a full review.",
+      "Use prior chat context only to avoid re-explaining already established points."
+    )
+  } else {
+    c(
     "Return a concise structured review with these headings: Verdict, Confidence score 0-100, Best-supported feature, Likely interference features, Key supporting evidence, Key conflicts, Literature context, Suggested next checks, References.",
-    "If no literature_evidence is provided or paper search failed, write Literature context: not used and References: not used.",
-    sep = "\n"
+      "If no literature_evidence is provided or paper search failed, write Literature context: not used and References: not used."
+    )
+  }
+  paste(
+    c(base_prompt, mode_prompt),
+    collapse = "\n"
   )
 }
 
@@ -134,13 +216,193 @@ metminer_ai_build_review_user_prompt <- function(compound_name,
                                                  evidence_bundle,
                                                  lc_conditions = "",
                                                  user_question = "") {
-  evidence_json <- jsonlite::toJSON(evidence_bundle, auto_unbox = TRUE, pretty = TRUE, na = "null")
+  evidence_json <- metminer_ai_safe_json(evidence_bundle)
   paste0(
     "Review the LC-MS annotation credibility for compound query: ", compound_name, "\n\n",
     "User LC-MS conditions:\n", coerce_text(lc_conditions, "not provided"), "\n\n",
     "User question:\n", coerce_text(user_question, "Please judge annotation credibility."), "\n\n",
     "Evidence bundle JSON:\n", evidence_json
   )
+}
+
+#' Build cache-optimised messages for DeepSeek / OpenAI-compatible prefix caching
+#'
+#' DeepSeek (and most OpenAI-compatible providers) use automatic prefix
+#' caching: identical token prefixes across requests are cached in the KV
+#' store so subsequent requests with the same prefix are much faster and
+#' cheaper.  This function structures messages so the long, static evidence
+#' block sits directly after the system prompt — forming the cacheable
+#' prefix — while the variable chat context and user question come last.
+#'
+#' @param system_prompt  System-level instruction (cached).
+#' @param evidence_json  Pre-serialised evidence JSON string (cached).
+#' @param compound_name  Compound name for the evidence label.
+#' @param lc_conditions  LC-MS conditions text.
+#' @param user_question  The new user question (NOT cached — must differ).
+#' @param chat_context   Optional brief summary of prior turns (NOT cached).
+#'
+#' @return A list of messages ready for `metminer_ai_chat`.
+#' @noRd
+metminer_ai_build_cacheable_messages <- function(system_prompt,
+                                                  evidence_json,
+                                                  compound_name,
+                                                  lc_conditions = "",
+                                                  user_question = "",
+                                                  chat_context = NULL,
+                                                  language = "en",
+                                                  mode = c("review", "chat")) {
+  mode <- match.arg(mode)
+  language_label <- metminer_ai_language_label(language)
+  # Cacheable prefix block — identical across follow-ups
+  evidence_block <- paste0(
+    "Compound: ", compound_name, "\n",
+    "LC-MS conditions: ", coerce_text(lc_conditions, "not provided"), "\n",
+    "Evidence:\n", evidence_json
+  )
+
+  messages <- list(
+    list(role = "system", content = system_prompt),
+    list(role = "user",   content = evidence_block),
+    list(role = "assistant", content = "Evidence loaded. I will answer based on this evidence.")
+  )
+
+  # Variable suffix — only this part changes between requests
+  if (!is.null(chat_context) && nzchar(chat_context)) {
+    messages[[length(messages) + 1L]] <- list(role = "user", content = chat_context)
+    messages[[length(messages) + 1L]] <- list(role = "assistant", content = "Understood. What is your question?")
+  }
+
+  messages[[length(messages) + 1L]] <- list(
+    role = "user",
+    content = paste(
+      paste0("Answer language: ", language_label, "."),
+      if (identical(mode, "chat")) {
+        "This is a follow-up question. Answer only this question and do not repeat the full previous review unless explicitly requested."
+      } else {
+        "Please review this annotation."
+      },
+      coerce_text(user_question, "Please review this annotation."),
+      sep = "\n"
+    )
+  )
+
+  messages
+}
+
+#' Extract a brief summary of the prior conversation for context reuse
+#'
+#' Strips long review text down to the Verdict line + confidence score;
+#' keeps user questions verbatim (they are short) and assistant messages
+#' are truncated to their first meaningful heading.
+#'
+#' @noRd
+metminer_ai_summarize_chat_context <- function(chat_history, max_summary_chars = 1500) {
+  if (length(chat_history) == 0) return("")
+  parts <- character()
+  total <- 0L
+  for (msg in rev(chat_history)) {
+    role <- msg$role %||% "user"
+    content <- msg$content %||% ""
+    if (role == "user") {
+      snippet <- paste0("[User asked]: ", metminer_ai_extract_first_sentence(content))
+    } else if (role == "assistant") {
+      snippet <- metminer_ai_extract_verdict_summary(content)
+    } else {
+      next
+    }
+    if (!nzchar(snippet)) next
+    total <- total + nchar(snippet)
+    if (total > max_summary_chars) break
+    parts <- c(parts, snippet)
+  }
+  paste(rev(parts), collapse = "\n")
+}
+
+metminer_ai_extract_first_sentence <- function(text) {
+  text <- trimws(text %||% "")
+  first <- sub("^([^.?!]+[.?!]).*", "\\1", text)
+  if (nchar(first) < nchar(text) * 0.9 && nchar(first) > 5) return(first)
+  if (nchar(text) > 500) paste0(substr(text, 1, 500), "...") else text
+}
+
+metminer_ai_extract_verdict_summary <- function(text) {
+  text <- trimws(text %||% "")
+  # Grab Verdict + Confidence score lines
+  verdict <- regmatches(text, regexpr("Verdict\\s*\\n.*?(?=\\n\\n|Confidence)", text, perl = TRUE))
+  verdict <- verdict %||% ""
+  confidence <- regmatches(text, regexpr("Confidence score:\\s*\\d+/100", text, perl = TRUE))
+  confidence <- confidence %||% ""
+  summary <- paste(c(verdict, confidence), collapse = "\n")
+  if (nzchar(trimws(summary))) return(trimws(summary))
+  # Fallback: first 400 chars
+  if (nchar(text) > 400) paste0(substr(text, 1, 400), "...") else text
+}
+
+metminer_ai_safe_json <- function(x) {
+  sanitize <- function(obj) {
+    if (is.data.frame(obj)) {
+      obj[] <- lapply(obj, sanitize)
+      return(obj)
+    }
+    if (is.list(obj) && !is.null(names(obj))) {
+      return(lapply(obj, sanitize))
+    }
+    if (is.numeric(obj)) {
+      obj[!is.finite(obj)] <- NA_real_
+    }
+    obj
+  }
+  jsonlite::toJSON(sanitize(x), auto_unbox = TRUE, pretty = TRUE, na = "null")
+}
+
+#' Trim an evidence bundle for chat follow-ups (strip heavy fields the LLM already saw)
+#'
+#' @noRd
+metminer_ai_compact_evidence_for_chat <- function(evidence) {
+  if (is.null(evidence)) return(evidence)
+  out <- evidence
+  # Keep feature_evidence slim: drop MS2 peak strings, keep id/mz/rt/role/status
+  if (!is.null(out$feature_evidence) && nrow(out$feature_evidence) > 0) {
+    fe <- out$feature_evidence
+    keep_cols <- intersect(
+      c("feature_id", "mode", "mz", "rt", "mean_area",
+        "network_role", "parent_feature_id", "relation_to_parent",
+        "recurrent_ion_group", "local_network_edge_count",
+        "ms2_precursor_mz", "ms2_precursor_rt"),
+      colnames(fe)
+    )
+    out$feature_evidence <- fe[, keep_cols, drop = FALSE]
+    # Truncate edge summary and MS2 peak strings
+    for (col in c("local_network_edges", "ms2_top_peaks")) {
+      if (col %in% colnames(fe)) out$feature_evidence[[col]] <- NA_character_
+    }
+  }
+  # Slim raw_annotation_candidates to essential columns
+  if (!is.null(out$raw_annotation_candidates) && nrow(out$raw_annotation_candidates) > 0) {
+    raw <- out$raw_annotation_candidates
+    slim_cols <- intersect(
+      c("variable_id", "Compound.name", "Adduct", "Level", "Total.score", "mode"),
+      colnames(raw)
+    )
+    out$raw_annotation_candidates <- raw[, slim_cols, drop = FALSE]
+  }
+  # Trim paper abstracts shorter for chat
+  if (!is.null(out$literature_evidence$papers)) {
+    out$literature_evidence$papers <- lapply(out$literature_evidence$papers, function(p) {
+      p$abstract <- metminer_ai_truncate_text(p$abstract, 300)
+      p
+    })
+  }
+  out
+}
+
+#' Truncate a chat message to a max character length
+#'
+#' @noRd
+metminer_ai_trim_chat_message <- function(msg, max_chars = 3000) {
+  if (is.null(msg$content) || nchar(msg$content) <= max_chars) return(msg)
+  msg$content <- paste0(substr(msg$content, 1L, max_chars), "\n\n... [truncated for length]")
+  msg
 }
 
 metminer_ai_find_paper_search_cli <- function(cli = NULL) {
@@ -223,16 +485,53 @@ metminer_ai_extract_json_object <- function(x) {
 metminer_ai_compact_paper_search <- function(result, max_papers = 20) {
   papers <- result$papers %||% list()
   compact <- lapply(utils::head(papers, max_papers), function(paper) {
+    title <- metminer_ai_first_text(paper$title, paper$name)
+    authors <- metminer_ai_author_text(paper$authors %||% paper$creators %||% paper$author)
+    year <- metminer_ai_first_text(
+      paper$year,
+      paper$published,
+      paper$published_date,
+      paper$publicationDate,
+      paper$publication_date,
+      paper$date
+    )
+    journal <- metminer_ai_first_text(
+      paper$journal,
+      paper$journal_name,
+      paper$venue,
+      paper$publicationVenue$name,
+      paper$publicationVenue,
+      paper$container_title,
+      paper$containerTitle,
+      paper$publisher,
+      paper$categories,
+      paper$source
+    )
+    source <- metminer_ai_first_text(paper$source, paper$database, paper$provider)
+    doi <- metminer_ai_first_text(
+      paper$doi,
+      paper$DOI,
+      paper$externalIds$DOI,
+      paper$external_ids$DOI,
+      paper$ids$doi
+    )
+    url <- metminer_ai_first_text(
+      paper$url,
+      paper$pdf_url,
+      paper$pdfUrl,
+      paper$openAccessPdf$url,
+      paper$link
+    )
     list(
-      title = paper$title %||% NA_character_,
-      authors = paper$authors %||% NA_character_,
-      year = paper$year %||% paper$published %||% paper$published_date %||% NA_character_,
-      journal = paper$journal %||% paper$venue %||% paper$container_title %||% paper$categories %||% paper$source %||% NA_character_,
-      source = paper$source %||% NA_character_,
-      doi = paper$doi %||% NA_character_,
-      paper_id = paper$paper_id %||% NA_character_,
-      url = paper$url %||% paper$pdf_url %||% NA_character_,
-      abstract = metminer_ai_truncate_text(paper$abstract %||% paper$summary %||% NA_character_, 900)
+      title = title,
+      authors = authors,
+      year = year,
+      journal = journal,
+      source = source,
+      doi = doi,
+      paper_id = metminer_ai_first_text(paper$paper_id, paper$paperId, paper$id, paper$pmid, paper$pmcid),
+      url = url,
+      abstract = metminer_ai_truncate_text(metminer_ai_first_text(paper$abstract, paper$summary), 900)
     )
   })
   list(
@@ -244,6 +543,70 @@ metminer_ai_compact_paper_search <- function(result, max_papers = 20) {
     total = result$total %||% length(compact),
     papers = compact
   )
+}
+
+metminer_ai_first_text <- function(...) {
+  values <- list(...)
+  for (value in values) {
+    if (is.null(value) || length(value) == 0) {
+      next
+    }
+    if (is.data.frame(value)) {
+      value <- as.list(value)
+    }
+    if (is.list(value)) {
+      if (!is.null(value$name)) {
+        value <- value$name
+      } else if (!is.null(value$title)) {
+        value <- value$title
+      } else if (!is.null(value$text)) {
+        value <- value$text
+      } else {
+        value <- unlist(value, use.names = FALSE)
+      }
+    }
+    value <- as.character(value)
+    value <- value[!is.na(value) & nzchar(trimws(value))]
+    if (length(value) > 0) {
+      return(paste(unique(trimws(value)), collapse = "; "))
+    }
+  }
+  NA_character_
+}
+
+metminer_ai_author_text <- function(authors) {
+  if (is.null(authors) || length(authors) == 0) {
+    return(NA_character_)
+  }
+  if (is.data.frame(authors)) {
+    if ("name" %in% colnames(authors)) {
+      authors <- authors$name
+    } else {
+      authors <- apply(authors, 1, function(x) paste(stats::na.omit(as.character(x)), collapse = " "))
+    }
+  } else if (is.list(authors)) {
+    authors <- vapply(authors, function(author) {
+      if (is.null(author)) {
+        return("")
+      }
+      if (is.list(author)) {
+        name <- author$name %||% author$full_name %||% author$fullName
+        if (!is.null(name) && has_text(name)) {
+          return(as.character(name)[1])
+        }
+        given <- author$given %||% author$first %||% author$firstName
+        family <- author$family %||% author$last %||% author$lastName
+        return(trimws(paste(given %||% "", family %||% "")))
+      }
+      as.character(author)[1]
+    }, character(1))
+  }
+  authors <- as.character(authors)
+  authors <- authors[!is.na(authors) & nzchar(trimws(authors))]
+  if (length(authors) == 0) {
+    return(NA_character_)
+  }
+  paste(unique(trimws(authors)), collapse = "; ")
 }
 
 metminer_ai_truncate_text <- function(x, max_chars = 900) {
@@ -446,7 +809,7 @@ metminer_ai_chat <- function(provider,
                              messages,
                              temperature = 0.3,
                              base_url = NULL,
-                             timeout_sec = 120) {
+                             timeout_sec = 300) {
   provider <- provider %||% "openai"
   defaults <- metminer_ai_provider_defaults(provider)
   model <- trimws(model %||% defaults$model)
@@ -462,19 +825,33 @@ metminer_ai_chat <- function(provider,
 }
 
 metminer_ai_chat_openai_compatible <- function(model, api_key, messages, temperature, base_url, timeout_sec) {
+  body <- list(
+    model = model,
+    messages = messages,
+    temperature = as.numeric(temperature)
+  )
+  body_json <- tryCatch(
+    jsonlite::toJSON(body, auto_unbox = TRUE, na = "null"),
+    error = function(e) stop("Failed to serialise request body: ", e$message, call. = FALSE)
+  )
   req <- httr2::request(base_url) |>
     httr2::req_method("POST") |>
     httr2::req_headers(
       Authorization = paste("Bearer", api_key),
       `Content-Type` = "application/json"
     ) |>
-    httr2::req_body_json(list(
-      model = model,
-      messages = messages,
-      temperature = as.numeric(temperature)
-    ), auto_unbox = TRUE) |>
-    httr2::req_timeout(timeout_sec)
-  resp <- httr2::req_perform(req)
+    httr2::req_body_raw(body_json, "application/json") |>
+    httr2::req_timeout(timeout_sec) |>
+    httr2::req_retry(max_tries = 2, max_seconds = timeout_sec)
+  resp <- tryCatch(
+    httr2::req_perform(req),
+    error = function(e) {
+      msg <- e$message %||% "unknown HTTP error"
+      parent_msg <- conditionMessage(e$parent) %||% ""
+      detail <- if (nzchar(parent_msg)) paste(msg, "-", parent_msg) else msg
+      stop("LLM API request failed: ", detail, call. = FALSE)
+    }
+  )
   parsed <- httr2::resp_body_json(resp, simplifyVector = FALSE)
   content <- parsed$choices[[1]]$message$content %||% ""
   if (!has_text(content)) stop("LLM response was empty.", call. = FALSE)

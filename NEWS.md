@@ -1,5 +1,22 @@
 # MetMiner v2 — Changelog
 
+## v0.1.0.9004 / app 2.0.1 (development)
+
+### 2026-05-05 — AI-assisted annotation review and literature-aware chat
+
+- **Added the AI Annotation Reviewer module** for evidence-based metabolite annotation review using user-configured LLM providers.
+- **Built a chat-style Shiny interface** with a collapsible settings sidebar, provider/model/API configuration, local desktop config persistence, language selection, and in-chat asynchronous progress indicators.
+- **Supported OpenAI-compatible providers, Gemini, DeepSeek, Qwen, Kimi, and Grok**, with provider-specific model choices and editable custom model IDs. DeepSeek defaults now use `deepseek-v4-flash`, with `deepseek-v4-pro` available and legacy `deepseek-chat` / `deepseek-reasoner` retained as compatibility options.
+- **Collected structured annotation evidence bundles** from non-redundant annotation tables, redundancy audit rows, raw metID candidates, feature-level MS1/MS2 summaries, feature-network roles, recurrent-ion status, and user-supplied LC-MS conditions.
+- **Added optional paper-search MCP integration** triggered by a checkbox or `@agent`, `@paper`, `@mcp`, and `@literature` chat tags. Literature citations are restricted to returned paper-search results and missing DOI values must be reported explicitly.
+- **Separated full Review prompts from follow-up Chat prompts**, so follow-up questions answer only the current request rather than repeating the complete annotation review.
+- **Added output language control** with Simplified Chinese listed first and English as the default; language instructions are enforced in both system and user prompts.
+- **Documented the module** in `inst/app/ai_annotation_principles.md`.
+
+*Co-authored with Codex (OpenAI GPT-5) and Claude Code*
+
+---
+
 ## v0.1.0.9003 (development)
 
 ### 2026-05-03 — Codex-assisted: feature network interpretation and parameter optimization UX
