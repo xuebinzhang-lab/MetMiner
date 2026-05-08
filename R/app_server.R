@@ -90,4 +90,6 @@ app_server <- function(input, output, session) {
   mod_annotation_filter_server("annotation_filter_1", global_data = global_data, prj_init = prj_init)
   # AI-assisted annotation review
   mod_ai_annotation_server("ai_annotation_1", global_data = global_data, prj_init = prj_init)
+  # PlantCyc database construction toolkit
+  mod_plantcyc_database_server("plantcyc_database_1")
 }

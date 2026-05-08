@@ -19,7 +19,7 @@ app_ui <- function(request) {
       title = tags$span(
         "MetMiner",
         # Add the version as a subscript.
-        tags$sub("version 2.0.1",
+        tags$sub("version 2.0.2",
                  style = "font-size: 0.75rem; color: #6c757d; font-weight: normal; margin-left: 5px; letter-spacing: 0;"),
         class = "fw-bold",
         style = "font-size: 1.6rem; color: #008080; letter-spacing: -0.5px; vertical-align: middle;"
@@ -89,6 +89,14 @@ app_ui <- function(request) {
         bslib::nav_panel("Classification", div(class="p-4", "Placeholder")),
         bslib::nav_panel("Differential Analysis", div(class="p-4", "Placeholder")),
         bslib::nav_panel("Enrichment", div(class="p-4", "Placeholder"))
+      ),
+
+      bslib::nav_menu(
+        title = "Toolkits",
+        bslib::nav_panel(
+          "PlantCyc Metabolite Database",
+          mod_plantcyc_database_ui("plantcyc_database_1")
+        )
       ),
 
       # --- 4. GitHub link ---

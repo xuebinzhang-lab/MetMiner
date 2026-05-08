@@ -15,7 +15,7 @@ metminer_builtin_annotation_databases <- function() {
   }
 
   available <- tryCatch({
-    data(package = "massdbbuildin")$results[, "Item"]
+    utils::data(package = "massdbbuildin")$results[, "Item"]
   }, error = function(e) character())
 
   if (length(available) == 0) {

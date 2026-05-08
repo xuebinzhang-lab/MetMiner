@@ -5,3 +5,4 @@
 ^\.git$
 ^\.\.Rcheck$
 ^MetMiner\.Rproj$
+^Temp$

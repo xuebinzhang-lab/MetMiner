@@ -1,5 +1,18 @@
 # MetMiner v2 — Changelog
 
+## v0.1.0.9005 / app 2.0.2 (development)
+
+### 2026-05-08 — PlantCyc/KEGG organism database construction
+
+- **Added a PlantCyc database construction toolkit** under `Toolkits`, including SmartTable upload guidance, LC-MS-oriented compound filtering, metID-compatible MS1/MS2 database generation, and metpath pathway database generation.
+- **Added optional Fiehn CFB/ClassyFire classification** with a default-off Shiny option, user warning, throttled requests, retry handling, and a persistent local PlantCyc classification cache reused by PlantCyc ID and InChIKey.
+- **Separated PlantCyc MS1 and MS2 compound backgrounds for CoA handling**: CoA/acyl-CoA derivatives are excluded from the MS1-only library, retained as MS2-eligible candidates, and accompanied by a CoA diagnostic-fragment rule table.
+- **Added conservative KEGG organism database helpers** that infer organism metabolite backgrounds from gene/KO/EC-supported reactions rather than full reference pathway compound lists.
+
+*Co-authored with Codex (OpenAI GPT-5) and Shawn*
+
+---
+
 ## v0.1.0.9004 / app 2.0.1 (development)
 
 ### 2026-05-05 — AI-assisted annotation review and literature-aware chat

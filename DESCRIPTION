@@ -1,6 +1,6 @@
 Package: MetMiner
 Title: Robust Plant Metabolomics and ISF Deconvolution
-Version: 0.1.0.9004
+Version: 0.1.0.9005
 Authors@R: 
     c(person(given = "Xiao",
              family = "Wang",
@@ -40,6 +40,7 @@ Imports:
     massprocesser,
     massqc,
     metid,
+    methods,
     MSnbase,
     patchwork,
     plotly,
@@ -54,13 +55,16 @@ Imports:
     tidyr,
     visNetwork,
     xcms
+Suggests:
+    metpath
 Remotes:
     tidymass/masscleaner,
     tidymass/massdbbuildin,
     tidymass/massdataset,
     tidymass/metid,
     tidymass/massprocesser,
-    tidymass/massqc
+    tidymass/massqc,
+    tidymass/metpath
 Encoding: UTF-8
 LazyData: true
 RoxygenNote: 7.3.2
