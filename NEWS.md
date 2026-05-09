@@ -8,6 +8,7 @@
 - **Added optional Fiehn CFB/ClassyFire classification** with a default-off Shiny option, user warning, throttled requests, retry handling, and a persistent local PlantCyc classification cache reused by PlantCyc ID and InChIKey.
 - **Separated PlantCyc MS1 and MS2 compound backgrounds for CoA handling**: CoA/acyl-CoA derivatives are excluded from the MS1-only library, retained as MS2-eligible candidates, and accompanied by a CoA diagnostic-fragment rule table.
 - **Added conservative KEGG organism database helpers** that infer organism metabolite backgrounds from gene/KO/EC-supported reactions rather than full reference pathway compound lists.
+- **Added a KEGG organism database Shiny toolkit** with a cached green-plant organism selector populated from KEGG organism entries.
 
 *Co-authored with Codex (OpenAI GPT-5) and Shawn*
 

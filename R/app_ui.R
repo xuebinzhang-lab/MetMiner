@@ -96,6 +96,10 @@ app_ui <- function(request) {
         bslib::nav_panel(
           "PlantCyc Metabolite Database",
           mod_plantcyc_database_ui("plantcyc_database_1")
+        ),
+        bslib::nav_panel(
+          "KEGG Organism Database",
+          mod_kegg_database_ui("kegg_database_1")
         )
       ),
 

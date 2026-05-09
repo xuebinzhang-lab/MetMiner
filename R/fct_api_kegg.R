@@ -64,6 +64,45 @@ metminer_kegg_parse_link <- function(text, col1, col2) {
   unique(out)
 }
 
+#' Parse KEGG organism list response
+#'
+#' @noRd
+metminer_kegg_parse_organism_list <- function(text) {
+  if (is.null(text) || !nzchar(text)) {
+    return(data.frame(
+      t_number = character(), organism_code = character(), organism_name = character(),
+      taxonomy = character(), stringsAsFactors = FALSE
+    ))
+  }
+  out <- utils::read.delim(text = text, header = FALSE, stringsAsFactors = FALSE, quote = "", comment.char = "")
+  if (ncol(out) < 4) {
+    return(data.frame(
+      t_number = character(), organism_code = character(), organism_name = character(),
+      taxonomy = character(), stringsAsFactors = FALSE
+    ))
+  }
+  out <- out[, 1:4, drop = FALSE]
+  colnames(out) <- c("t_number", "organism_code", "organism_name", "taxonomy")
+  out[] <- lapply(out, trimws)
+  out
+}
+
+#' Fetch KEGG green plant organisms for organism-code selectors
+#'
+#' @noRd
+metminer_kegg_green_plant_organisms <- function(cache_dir = file.path(tools::R_user_dir("MetMiner", which = "cache"), "kegg"),
+                                                sleep_sec = 0.3,
+                                                force = FALSE) {
+  organisms <- metminer_kegg_parse_organism_list(
+    metminer_kegg_rest_text("list/organism", cache_dir = cache_dir, sleep_sec = sleep_sec, force = force)
+  )
+  plants <- organisms[grepl("^Eukaryotes;Plants", organisms$taxonomy), , drop = FALSE]
+  plants <- plants[order(plants$organism_name), , drop = FALSE]
+  plants$display_name <- paste0(plants$organism_code, " - ", plants$organism_name)
+  rownames(plants) <- NULL
+  plants
+}
+
 #' Parse KEGG list/pathway/<org> response
 #'
 #' @noRd
