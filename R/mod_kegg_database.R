@@ -74,12 +74,13 @@ mod_kegg_database_ui <- function(id) {
             div(
               downloadButton(ns("download_bundle"), "Download Bundle", class = "btn-success"),
               downloadButton(ns("download_ms1"), "MS1 .rda", class = "btn-outline-primary ms-2"),
+              downloadButton(ns("download_ms2"), "MS2 .rda", class = "btn-outline-primary ms-2"),
               downloadButton(ns("download_pathway"), "Pathway .rda", class = "btn-outline-primary ms-2")
             )
           ),
 
           bslib::layout_columns(
-            col_widths = c(3, 3, 3, 3),
+            col_widths = c(3, 3, 3, 3, 3),
             bslib::value_box(
               title = "Compounds",
               value = textOutput(ns("value_compounds"), inline = TRUE),
@@ -89,6 +90,11 @@ mod_kegg_database_ui <- function(id) {
               title = "Pathways",
               value = textOutput(ns("value_pathways"), inline = TRUE),
               showcase = bsicons::bs_icon("diagram-3")
+            ),
+            bslib::value_box(
+              title = "MS2 Compounds",
+              value = textOutput(ns("value_ms2"), inline = TRUE),
+              showcase = bsicons::bs_icon("soundwave")
             ),
             bslib::value_box(
               title = "Supported Reactions",
@@ -114,10 +120,11 @@ mod_kegg_database_ui <- function(id) {
             bslib::navset_tab(
               bslib::nav_panel("Summary", DT::dataTableOutput(ns("tbl_summary"))),
               bslib::nav_panel("Compounds", DT::dataTableOutput(ns("tbl_compounds"))),
+              bslib::nav_panel("MS2 Compounds", DT::dataTableOutput(ns("tbl_ms2_info"))),
+              bslib::nav_panel("MS2 Match Log", DT::dataTableOutput(ns("tbl_ms2_match_log"))),
               bslib::nav_panel("Pathway Map", DT::dataTableOutput(ns("tbl_pathway_map"))),
               bslib::nav_panel("Reaction Evidence", DT::dataTableOutput(ns("tbl_reactions"))),
-              bslib::nav_panel("Removed Compounds", DT::dataTableOutput(ns("tbl_removed"))),
-              bslib::nav_panel("Organism List", DT::dataTableOutput(ns("tbl_organisms")))
+              bslib::nav_panel("Removed Compounds", DT::dataTableOutput(ns("tbl_removed")))
             )
           )
         )
@@ -178,6 +185,7 @@ mod_kegg_database_server <- function(id) {
     }
     output$value_compounds <- renderText(summary_value("clean_compounds"))
     output$value_pathways <- renderText(summary_value("pathways"))
+    output$value_ms2 <- renderText(summary_value("ms2_compounds"))
     output$value_reactions <- renderText(summary_value("supported_pathway_reactions"))
     output$value_links <- renderText(summary_value("pathway_compound_links"))
 
@@ -188,6 +196,14 @@ mod_kegg_database_server <- function(id) {
     output$tbl_compounds <- DT::renderDataTable({
       req(state$result)
       DT::datatable(state$result$clean_compounds, options = list(scrollX = TRUE, pageLength = 10))
+    })
+    output$tbl_ms2_info <- DT::renderDataTable({
+      req(state$result)
+      DT::datatable(state$result$ms2_database@spectra.info, options = list(scrollX = TRUE, pageLength = 10))
+    })
+    output$tbl_ms2_match_log <- DT::renderDataTable({
+      req(state$result)
+      DT::datatable(state$result$ms2_match_log, options = list(scrollX = TRUE, pageLength = 10))
     })
     output$tbl_pathway_map <- DT::renderDataTable({
       req(state$result)
@@ -201,11 +217,6 @@ mod_kegg_database_server <- function(id) {
       req(state$result)
       DT::datatable(state$result$removed_compounds, options = list(scrollX = TRUE, pageLength = 10))
     })
-    output$tbl_organisms <- DT::renderDataTable({
-      req(nrow(state$organisms) > 0)
-      DT::datatable(state$organisms, options = list(scrollX = TRUE, pageLength = 20))
-    })
-
     observeEvent(input$run, {
       req(input$organism_code, input$organism_name)
       output_dir <- trimws(input$output_dir %||% "")
@@ -241,6 +252,7 @@ mod_kegg_database_server <- function(id) {
           "Output folder: ", output_dir, "\n",
           "Organism: ", input$organism_name, " (", input$organism_code, ")\n",
           "Compounds: ", nrow(result$clean_compounds), "\n",
+          "MS2 compounds: ", nrow(result$ms2_database@spectra.info), "\n",
           "Pathways: ", length(result$pathway_database@pathway_id), "\n",
           "Supported reactions: ", length(unique(result$pathway_reaction_map$reaction_id)), "\n",
           "Ready for download."
@@ -264,6 +276,13 @@ mod_kegg_database_server <- function(id) {
       content = function(file) {
         req(state$result)
         file.copy(file.path(state$result$output_dir, paste0("kegg_", input$organism_code, "_pathway.rda")), file, overwrite = TRUE)
+      }
+    )
+    output$download_ms2 <- downloadHandler(
+      filename = function() paste0("kegg_", input$organism_code %||% "organism", "_ms2.rda"),
+      content = function(file) {
+        req(state$result)
+        file.copy(file.path(state$result$output_dir, paste0("kegg_", input$organism_code, "_ms2.rda")), file, overwrite = TRUE)
       }
     )
     output$download_bundle <- downloadHandler(

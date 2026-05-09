@@ -61,7 +61,16 @@ metminer_kegg_parse_link <- function(text, col1, col2) {
   out <- out[, 1:2, drop = FALSE]
   colnames(out) <- c(col1, col2)
   out[] <- lapply(out, trimws)
+  out[] <- lapply(out, metminer_kegg_strip_id)
   unique(out)
+}
+
+#' Remove KEGG REST namespace prefixes from IDs
+#'
+#' @noRd
+metminer_kegg_strip_id <- function(x) {
+  x <- as.character(x)
+  sub("^(path|cpd|rn|ko|ec):", "", x)
 }
 
 #' Parse KEGG organism list response
@@ -116,7 +125,7 @@ metminer_kegg_parse_pathway_list <- function(text) {
 #'
 #' @noRd
 metminer_kegg_path_to_map <- function(pathway_id) {
-  sub("^path:[a-z]{3,4}([0-9]{5})$", "path:map\\1", pathway_id)
+  sub("^[a-z]{3,4}([0-9]{5})$", "map\\1", pathway_id)
 }
 
 #' Split KEGG compound names
@@ -150,7 +159,7 @@ metminer_kegg_parse_compound_flat <- function(text) {
     entry_id <- sub("\\s+.*$", "", fields$ENTRY %||% "")
     names <- metminer_kegg_split_names(fields$NAME %||% "")
     data.frame(
-      compound_id = paste0("cpd:", entry_id),
+      compound_id = entry_id,
       compound_name = if (length(names) > 0) names[1] else NA_character_,
       synonyms = if (length(names) > 1) paste(names[-1], collapse = " // ") else NA_character_,
       formula = fields$FORMULA %||% NA_character_,
@@ -176,7 +185,7 @@ metminer_kegg_parse_compound_flat <- function(text) {
 metminer_kegg_get_compounds <- function(compound_ids,
                                         cache_dir,
                                         sleep_sec = 0.3) {
-  compound_ids <- unique(sub("^cpd:", "", compound_ids))
+  compound_ids <- unique(metminer_kegg_strip_id(compound_ids))
   compound_ids <- compound_ids[nzchar(compound_ids)]
   chunks <- split(compound_ids, ceiling(seq_along(compound_ids) / 10))
   rows <- lapply(chunks, function(ids) {
@@ -209,10 +218,10 @@ metminer_filter_kegg_compounds <- function(compounds,
   }
   if (isTRUE(remove_currency)) {
     currency <- c(
-      "cpd:C00001", "cpd:C00002", "cpd:C00003", "cpd:C00004", "cpd:C00005",
-      "cpd:C00006", "cpd:C00007", "cpd:C00008", "cpd:C00009", "cpd:C00010",
-      "cpd:C00011", "cpd:C00013", "cpd:C00014", "cpd:C00015", "cpd:C00016",
-      "cpd:C00020", "cpd:C00035", "cpd:C00044", "cpd:C00061", "cpd:C00080"
+      "C00001", "C00002", "C00003", "C00004", "C00005",
+      "C00006", "C00007", "C00008", "C00009", "C00010",
+      "C00011", "C00013", "C00014", "C00015", "C00016",
+      "C00020", "C00035", "C00044", "C00061", "C00080"
     )
     add_reason(compounds$compound_id %in% currency, "currency_metabolite")
   }
@@ -234,7 +243,7 @@ metminer_kegg_spectra_info <- function(compounds) {
     RT = NA_real_,
     CAS.ID = NA_character_,
     HMDB.ID = NA_character_,
-    KEGG.ID = sub("^cpd:", "", compounds$compound_id),
+    KEGG.ID = compounds$compound_id,
     Formula = compounds$formula,
     mz.pos = NA_real_,
     mz.neg = NA_real_,
@@ -273,6 +282,261 @@ metminer_build_kegg_ms1_database <- function(compounds,
     ),
     spectra.info = metminer_kegg_spectra_info(compounds),
     spectra.data = list(Spectra.positive = list(), Spectra.negative = list())
+  )
+}
+
+#' Split KEGG identifier fields from public MS2 databases
+#'
+#' @noRd
+metminer_kegg_split_public_ids <- function(x) {
+  x <- as.character(x)
+  x[is.na(x)] <- ""
+  ids <- unlist(strsplit(x, "\\{\\}|[;,[:space:]]+", perl = TRUE), use.names = FALSE)
+  ids <- metminer_kegg_strip_id(trimws(ids))
+  unique(ids[nzchar(ids)])
+}
+
+#' Normalize text for conservative KEGG-name MS2 fallback matching
+#'
+#' @noRd
+metminer_kegg_normalize_name <- function(x) {
+  x <- tolower(as.character(x))
+  x[is.na(x)] <- ""
+  x <- gsub("\\s+", " ", x, perl = TRUE)
+  trimws(x)
+}
+
+#' Build KEGG compound match indices for public MS2 extraction
+#'
+#' @noRd
+metminer_kegg_build_match_index <- function(compounds) {
+  base <- data.frame(
+    kegg_id = compounds$compound_id,
+    compound_name = compounds$compound_name,
+    formula = compounds$formula,
+    mz = as.numeric(compounds$mz),
+    stringsAsFactors = FALSE
+  )
+  synonym_list <- strsplit(as.character(compounds$synonyms %||% rep("", nrow(compounds))), " // ", fixed = TRUE)
+  name_rows <- vector("list", nrow(compounds))
+  for (i in seq_len(nrow(compounds))) {
+    names_i <- unique(c(compounds$compound_name[i], synonym_list[[i]]))
+    names_i <- metminer_kegg_normalize_name(names_i)
+    names_i <- names_i[nzchar(names_i)]
+    name_rows[[i]] <- data.frame(kegg_id = compounds$compound_id[i], name_key = names_i, stringsAsFactors = FALSE)
+  }
+  name_index <- unique(do.call(rbind, name_rows))
+  list(base = base, name_index = name_index)
+}
+
+#' Match KEGG compounds to a public MS2 spectra.info table
+#'
+#' @noRd
+metminer_match_kegg_public_ms2 <- function(compounds,
+                                           public_info,
+                                           source_database,
+                                           mass_tolerance_ppm = 10,
+                                           mass_tolerance_da = 0.01) {
+  idx <- metminer_kegg_build_match_index(compounds)
+  base <- idx$base
+  name_index <- idx$name_index
+  public <- as.data.frame(public_info, stringsAsFactors = FALSE)
+  public$source_row <- seq_len(nrow(public))
+  public$Lab.ID <- as.character(public$Lab.ID)
+  public_mz <- suppressWarnings(as.numeric(public$mz))
+  public_name <- if ("Compound.name" %in% colnames(public)) as.character(public$Compound.name) else rep("", nrow(public))
+  public_synonyms <- if ("Synonyms" %in% colnames(public)) as.character(public$Synonyms) else rep("", nrow(public))
+  public_formula <- if ("Formula" %in% colnames(public)) as.character(public$Formula) else rep("", nrow(public))
+  public_kegg <- if ("KEGG.ID" %in% colnames(public)) as.character(public$KEGG.ID) else rep("", nrow(public))
+
+  rows <- list()
+  add_matches <- function(row_i, candidates, match_type, rank) {
+    if (nrow(candidates) == 0) return(invisible(NULL))
+    candidates$public_mz <- public_mz[row_i]
+    candidates$mass_error <- abs(candidates$mz - candidates$public_mz)
+    candidates$mass_error_ppm <- candidates$mass_error * 1e6 / ifelse(candidates$mz < 400, 400, candidates$mz)
+    candidates$formula_match <- nzchar(public_formula[row_i]) & candidates$formula == public_formula[row_i]
+    if (match_type != "kegg_id") {
+      candidates <- candidates[
+        candidates$formula_match &
+          (candidates$mass_error <= mass_tolerance_da | candidates$mass_error_ppm <= mass_tolerance_ppm),
+        ,
+        drop = FALSE
+      ]
+    }
+    if (nrow(candidates) == 0) return(invisible(NULL))
+    rows[[length(rows) + 1L]] <<- data.frame(
+      kegg_id = candidates$kegg_id,
+      public_row = public$source_row[row_i],
+      source_database = source_database,
+      source_lab_id = public$Lab.ID[row_i],
+      source_compound_name = public_name[row_i],
+      match_type = match_type,
+      match_rank = rank,
+      formula_match = candidates$formula_match,
+      mass_error = candidates$mass_error,
+      mass_error_ppm = candidates$mass_error_ppm,
+      stringsAsFactors = FALSE
+    )
+    invisible(NULL)
+  }
+
+  for (i in seq_len(nrow(public))) {
+    kegg_ids <- metminer_kegg_split_public_ids(public_kegg[i])
+    if (length(kegg_ids) > 0) {
+      candidates <- base[base$kegg_id %in% kegg_ids, , drop = FALSE]
+      add_matches(i, candidates, "kegg_id", 1L)
+      if (nrow(candidates) > 0) next
+    }
+
+    names_i <- unique(c(public_name[i], unlist(strsplit(public_synonyms[i], "\\{\\}", perl = TRUE), use.names = FALSE)))
+    name_keys <- metminer_kegg_normalize_name(names_i)
+    name_keys <- name_keys[nzchar(name_keys)]
+    if (length(name_keys) > 0) {
+      hit_ids <- unique(name_index$kegg_id[name_index$name_key %in% name_keys])
+      candidates <- base[base$kegg_id %in% hit_ids, , drop = FALSE]
+      add_matches(i, candidates, "name_formula_mass", 2L)
+    }
+  }
+
+  if (length(rows) == 0) {
+    return(data.frame(
+      kegg_id = character(), public_row = integer(), source_database = character(),
+      source_lab_id = character(), source_compound_name = character(), match_type = character(),
+      match_rank = integer(), formula_match = logical(), mass_error = numeric(),
+      mass_error_ppm = numeric(), stringsAsFactors = FALSE
+    ))
+  }
+  out <- do.call(rbind, rows)
+  out <- out[order(out$public_row, out$match_rank, out$mass_error_ppm), , drop = FALSE]
+  out[!duplicated(paste(out$public_row, out$kegg_id)), , drop = FALSE]
+}
+
+#' Add one MS2 spectrum to a KEGG spectra.data list
+#'
+#' @noRd
+metminer_kegg_add_spectrum <- function(spectra_data, polarity, kegg_id, ce_label, spectrum) {
+  polarity_name <- if (tolower(polarity) == "negative") "Spectra.negative" else "Spectra.positive"
+  if (is.null(spectra_data[[polarity_name]][[kegg_id]])) {
+    spectra_data[[polarity_name]][[kegg_id]] <- list()
+  }
+  ce_label <- gsub("[^A-Za-z0-9_.+-]+", "_", ce_label)
+  if (ce_label %in% names(spectra_data[[polarity_name]][[kegg_id]])) {
+    ce_label <- paste0(ce_label, "__", length(spectra_data[[polarity_name]][[kegg_id]]) + 1L)
+  }
+  spectrum <- as.data.frame(spectrum)
+  spectrum$mz <- suppressWarnings(as.numeric(spectrum$mz))
+  spectrum$intensity <- suppressWarnings(as.numeric(spectrum$intensity))
+  spectrum <- spectrum[!is.na(spectrum$mz) & !is.na(spectrum$intensity), c("mz", "intensity"), drop = FALSE]
+  if (nrow(spectrum) > 0) {
+    spectra_data[[polarity_name]][[kegg_id]][[ce_label]] <- spectrum
+  }
+  spectra_data
+}
+
+#' Build a KEGG-linked MS2 databaseClass object from massdbbuildin
+#'
+#' @noRd
+metminer_build_kegg_ms2_database <- function(compounds,
+                                             organism_code,
+                                             organism_name,
+                                             version = as.character(Sys.Date()),
+                                             builtin_databases = c("hmdb_ms2", "massbank_ms2", "mona_ms2"),
+                                             mass_tolerance_ppm = 10,
+                                             mass_tolerance_da = 0.01) {
+  if (!requireNamespace("metid", quietly = TRUE)) {
+    stop("Package 'metid' is required to construct databaseClass objects.", call. = FALSE)
+  }
+  if (!requireNamespace("massdbbuildin", quietly = TRUE)) {
+    stop("Package 'massdbbuildin' is required to extract built-in MS2 spectra.", call. = FALSE)
+  }
+
+  kegg_info <- metminer_kegg_spectra_info(compounds)
+  all_matches <- list()
+  spectra_data <- list(Spectra.positive = list(), Spectra.negative = list())
+
+  for (db_id in builtin_databases) {
+    env <- new.env(parent = emptyenv())
+    utils::data(list = db_id, package = "massdbbuildin", envir = env)
+    public_db <- get(db_id, envir = env)
+    source_database <- public_db@database.info$Source %||% db_id
+    public_info <- as.data.frame(public_db@spectra.info, stringsAsFactors = FALSE)
+    matches <- metminer_match_kegg_public_ms2(
+      compounds = compounds,
+      public_info = public_info,
+      source_database = source_database,
+      mass_tolerance_ppm = mass_tolerance_ppm,
+      mass_tolerance_da = mass_tolerance_da
+    )
+    if (nrow(matches) == 0) next
+    all_matches[[source_database]] <- matches
+
+    for (i in seq_len(nrow(matches))) {
+      public_row <- matches$public_row[i]
+      source_lab_id <- matches$source_lab_id[i]
+      polarity <- public_info$Polarity[public_row] %||% NA_character_
+      polarity <- ifelse(tolower(polarity) == "negative", "negative", "positive")
+      source_spectra <- public_db@spectra.data[[if (polarity == "negative") "Spectra.negative" else "Spectra.positive"]][[source_lab_id]]
+      if (is.null(source_spectra) || length(source_spectra) == 0) next
+      for (ce_name in names(source_spectra)) {
+        ce_label <- paste(source_database, source_lab_id, ce_name %||% "Unknown", sep = "__")
+        spectra_data <- metminer_kegg_add_spectrum(
+          spectra_data = spectra_data,
+          polarity = polarity,
+          kegg_id = matches$kegg_id[i],
+          ce_label = ce_label,
+          spectrum = source_spectra[[ce_name]]
+        )
+      }
+    }
+  }
+
+  match_log <- if (length(all_matches) > 0) do.call(rbind, all_matches) else
+    data.frame(
+      kegg_id = character(), public_row = integer(), source_database = character(),
+      source_lab_id = character(), source_compound_name = character(), match_type = character(),
+      match_rank = integer(), formula_match = logical(), mass_error = numeric(),
+      mass_error_ppm = numeric(), stringsAsFactors = FALSE
+    )
+  rownames(match_log) <- NULL
+
+  ms2_ids <- unique(c(names(spectra_data$Spectra.positive), names(spectra_data$Spectra.negative)))
+  spectra_info <- kegg_info[kegg_info$Lab.ID %in% ms2_ids, , drop = FALSE]
+  if (nrow(spectra_info) > 0 && nrow(match_log) > 0) {
+    provenance <- lapply(split(match_log, match_log$kegg_id), function(x) {
+      data.frame(
+        Lab.ID = x$kegg_id[1],
+        source_database = metminer_plantcyc_collapse_unique(x$source_database),
+        source_lab_id = metminer_plantcyc_collapse_unique(x$source_lab_id),
+        source_compound_name = metminer_plantcyc_collapse_unique(x$source_compound_name),
+        match_type = metminer_plantcyc_collapse_unique(x$match_type),
+        stringsAsFactors = FALSE
+      )
+    })
+    provenance <- do.call(rbind, provenance)
+    spectra_info <- merge(spectra_info, provenance, by = "Lab.ID", all.x = TRUE, sort = FALSE)
+  }
+
+  database <- methods::new(
+    Class = "databaseClass",
+    database.info = list(
+      Version = version,
+      Source = "KEGG <https://www.kegg.jp/> + massdbbuildin MS2",
+      Link = "https://www.kegg.jp/",
+      Creater = "codex+shawn",
+      Email = NA_character_,
+      RT = FALSE,
+      Organism = paste0(organism_name, " (", organism_code, ")"),
+      Description = "MS2 spectra extracted from massdbbuildin by KEGG.ID, with conservative name/formula/mass fallback."
+    ),
+    spectra.info = as.data.frame(spectra_info, stringsAsFactors = FALSE),
+    spectra.data = spectra_data
+  )
+
+  list(
+    database = database,
+    match_log = match_log,
+    unmatched_compounds = kegg_info[!(kegg_info$Lab.ID %in% ms2_ids), , drop = FALSE]
   )
 }
 
@@ -394,7 +658,7 @@ metminer_build_kegg_organism_database <- function(organism_code = "zma",
   )
   supported <- unique(supported)
 
-  map_rn <- path_rn[grepl("^path:map", path_rn$pathway_id), , drop = FALSE]
+  map_rn <- path_rn[grepl("^map", path_rn$pathway_id), , drop = FALSE]
   colnames(map_rn)[colnames(map_rn) == "pathway_id"] <- "map_id"
   pathway_reaction_map <- merge(supported, map_rn, by = c("map_id", "reaction_id"))
   pathway_reaction_map <- unique(pathway_reaction_map[, c("pathway_id", "map_id", "gene_id", "reaction_id", "evidence_type"), drop = FALSE])
@@ -418,13 +682,18 @@ metminer_build_kegg_organism_database <- function(organism_code = "zma",
   clean_compounds <- clean_compounds[clean_compounds$compound_id %in% unique(pathway_compound_map$compound_id), , drop = FALSE]
 
   ms1_db <- metminer_build_kegg_ms1_database(clean_compounds, organism_code, organism_name, version)
+  ms2_result <- metminer_build_kegg_ms2_database(clean_compounds, organism_code, organism_name, version)
+  ms2_db <- ms2_result$database
   pathway_db <- metminer_build_kegg_pathway_database(pathway_compound_map, pathway_reaction_map, organism_code, organism_name, version)
 
   object_name_ms1 <- paste0("kegg_", organism_code, "_ms1")
+  object_name_ms2 <- paste0("kegg_", organism_code, "_ms2")
   object_name_pathway <- paste0("kegg_", organism_code, "_pathway")
   assign(object_name_ms1, ms1_db)
+  assign(object_name_ms2, ms2_db)
   assign(object_name_pathway, pathway_db)
   save(list = object_name_ms1, file = file.path(output_dir, paste0("kegg_", organism_code, "_ms1.rda")))
+  save(list = object_name_ms2, file = file.path(output_dir, paste0("kegg_", organism_code, "_ms2.rda")))
   save(list = object_name_pathway, file = file.path(output_dir, paste0("kegg_", organism_code, "_pathway.rda")))
   utils::write.table(clean_compounds, file.path(output_dir, paste0("kegg_", organism_code, "_clean_compounds.tsv")),
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
@@ -434,20 +703,44 @@ metminer_build_kegg_organism_database <- function(organism_code = "zma",
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
   utils::write.table(pathway_compound_map, file.path(output_dir, paste0("kegg_", organism_code, "_pathway_compound_map.tsv")),
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+  utils::write.table(ms2_db@spectra.info, file.path(output_dir, paste0("kegg_", organism_code, "_ms2_spectra_info.tsv")),
+                     sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+  utils::write.table(ms2_result$match_log, file.path(output_dir, paste0("kegg_", organism_code, "_ms2_match_log.tsv")),
+                     sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+  utils::write.table(ms2_result$unmatched_compounds, file.path(output_dir, paste0("kegg_", organism_code, "_ms2_unmatched_compounds.tsv")),
+                     sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+
+  positive_spectra <- sum(vapply(ms2_db@spectra.data$Spectra.positive, length, integer(1)))
+  negative_spectra <- sum(vapply(ms2_db@spectra.data$Spectra.negative, length, integer(1)))
 
   summary <- data.frame(
     metric = c(
       "pathways", "pathway_gene_links", "gene_ko_links", "gene_ec_links",
       "supported_pathway_reactions", "raw_reaction_supported_compounds",
-      "clean_compounds", "removed_compounds", "pathway_compound_links"
+      "clean_compounds", "removed_compounds", "pathway_compound_links",
+      "ms2_compounds", "ms2_positive_compounds", "ms2_negative_compounds",
+      "ms2_positive_spectra", "ms2_negative_spectra", "ms2_match_rows",
+      "ms2_unmatched_compounds"
     ),
     value = c(
       nrow(pathways), nrow(path_gene), nrow(gene_ko), nrow(gene_ec),
       length(unique(pathway_reaction_map$reaction_id)), length(unique(compounds$compound_id)),
-      nrow(clean_compounds), nrow(removed_compounds), nrow(pathway_compound_map)
+      nrow(clean_compounds), nrow(removed_compounds), nrow(pathway_compound_map),
+      nrow(ms2_db@spectra.info), length(ms2_db@spectra.data$Spectra.positive),
+      length(ms2_db@spectra.data$Spectra.negative), positive_spectra, negative_spectra,
+      nrow(ms2_result$match_log), nrow(ms2_result$unmatched_compounds)
     ),
     stringsAsFactors = FALSE
   )
+  if (nrow(ms2_result$match_log) > 0) {
+    source_table <- table(ms2_result$match_log$source_database)
+    type_table <- table(ms2_result$match_log$match_type)
+    summary <- rbind(
+      summary,
+      data.frame(metric = paste0("match_source_", names(source_table)), value = as.integer(source_table)),
+      data.frame(metric = paste0("match_type_", names(type_table)), value = as.integer(type_table))
+    )
+  }
   if (nrow(removed_compounds) > 0) {
     reason_table <- sort(table(unlist(strsplit(removed_compounds$filter_reason, ";", fixed = TRUE))), decreasing = TRUE)
     summary <- rbind(summary, data.frame(metric = paste0("removed_", names(reason_table)), value = as.integer(reason_table)))
@@ -457,11 +750,14 @@ metminer_build_kegg_organism_database <- function(organism_code = "zma",
 
   list(
     ms1_database = ms1_db,
+    ms2_database = ms2_db,
     pathway_database = pathway_db,
     clean_compounds = clean_compounds,
     removed_compounds = removed_compounds,
     pathway_reaction_map = pathway_reaction_map,
     pathway_compound_map = pathway_compound_map,
+    ms2_match_log = ms2_result$match_log,
+    ms2_unmatched_compounds = ms2_result$unmatched_compounds,
     summary = summary,
     output_dir = output_dir
   )

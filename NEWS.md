@@ -9,6 +9,7 @@
 - **Separated PlantCyc MS1 and MS2 compound backgrounds for CoA handling**: CoA/acyl-CoA derivatives are excluded from the MS1-only library, retained as MS2-eligible candidates, and accompanied by a CoA diagnostic-fragment rule table.
 - **Added conservative KEGG organism database helpers** that infer organism metabolite backgrounds from gene/KO/EC-supported reactions rather than full reference pathway compound lists.
 - **Added a KEGG organism database Shiny toolkit** with a cached green-plant organism selector populated from KEGG organism entries.
+- **Extended KEGG database construction to build MS2 databases from massdbbuildin**, using KEGG compound IDs as the primary join key and exporting bare KEGG IDs without `cpd:` or `path:` prefixes.
 
 *Co-authored with Codex (OpenAI GPT-5) and Shawn*
 
