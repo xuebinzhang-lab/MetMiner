@@ -85,6 +85,16 @@ mod_plantcyc_database_ui <- function(id) {
           tags$hr(),
           tags$h6(class = "fw-bold text-primary", "4. Output"),
           textInput(
+            ns("output_prefix"),
+            "Output file prefix",
+            value = "plantcyc_custom",
+            placeholder = "e.g. plantcyc_maize, maize, corn, yumi"
+          ),
+          tags$small(
+            class = "text-muted d-block mb-2",
+            "Used for .rda object names and output filenames."
+          ),
+          textInput(
             ns("output_dir"),
             "Output folder",
             value = file.path("Temp", "plantcyc_database"),
@@ -184,7 +194,8 @@ mod_plantcyc_database_server <- function(id) {
     state <- reactiveValues(
       result = NULL,
       status = "Waiting for PlantCyc SmartTable uploads.",
-      output_dir = NULL
+      output_dir = NULL,
+      output_prefix = NULL
     )
 
     show_help <- function() {
@@ -304,7 +315,12 @@ mod_plantcyc_database_server <- function(id) {
       if (!grepl("^/", output_dir)) {
         output_dir <- file.path(getwd(), output_dir)
       }
+      output_prefix <- metminer_plantcyc_sanitize_prefix(input$output_prefix %||% "plantcyc_custom")
+      if (!identical(output_prefix, input$output_prefix)) {
+        updateTextInput(session, "output_prefix", value = output_prefix)
+      }
       state$output_dir <- output_dir
+      state$output_prefix <- output_prefix
 
       show_progress_modal("PlantCyc Database", "Checking uploaded SmartTables...", 5)
       shinyjs::disable("run")
@@ -395,32 +411,34 @@ mod_plantcyc_database_server <- function(id) {
 
         update_progress_modal(82, "Saving RDA databases and QC tables...")
         if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
-        plantcyc_ftataricum_ms1 <- ms1_db
-        plantcyc_ftataricum_ms2 <- ms2_db
-        plantcyc_ftataricum_pathway <- pathway_db
-        save(plantcyc_ftataricum_ms1, file = file.path(output_dir, "plantcyc_ftataricum_ms1.rda"))
-        save(plantcyc_ftataricum_ms2, file = file.path(output_dir, "plantcyc_ftataricum_ms2.rda"))
-        save(plantcyc_ftataricum_pathway, file = file.path(output_dir, "plantcyc_ftataricum_pathway.rda"))
-        utils::write.table(ms1_db@spectra.info, file.path(output_dir, "plantcyc_ms1_spectra_info.tsv"),
+        rda_files <- list(
+          ms1 = paste0(output_prefix, "_ms1.rda"),
+          ms2 = paste0(output_prefix, "_ms2.rda"),
+          pathway = paste0(output_prefix, "_pathway.rda")
+        )
+        metminer_save_named_rda(ms1_db, paste0(output_prefix, "_ms1"), file.path(output_dir, rda_files$ms1))
+        metminer_save_named_rda(ms2_db, paste0(output_prefix, "_ms2"), file.path(output_dir, rda_files$ms2))
+        metminer_save_named_rda(pathway_db, paste0(output_prefix, "_pathway"), file.path(output_dir, rda_files$pathway))
+        utils::write.table(ms1_db@spectra.info, file.path(output_dir, paste0(output_prefix, "_ms1_spectra_info.tsv")),
                            sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-        utils::write.table(clean_result$ms2_eligible_compounds, file.path(output_dir, "plantcyc_ms2_eligible_compounds.tsv"),
+        utils::write.table(clean_result$ms2_eligible_compounds, file.path(output_dir, paste0(output_prefix, "_ms2_eligible_compounds.tsv")),
                            sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-        utils::write.table(metminer_plantcyc_coa_fragment_rules(), file.path(output_dir, "plantcyc_coa_fragment_rules.tsv"),
+        utils::write.table(metminer_plantcyc_coa_fragment_rules(), file.path(output_dir, paste0(output_prefix, "_coa_fragment_rules.tsv")),
                            sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-        utils::write.table(ms2_db@spectra.info, file.path(output_dir, "plantcyc_ms2_spectra_info.tsv"),
+        utils::write.table(ms2_db@spectra.info, file.path(output_dir, paste0(output_prefix, "_ms2_spectra_info.tsv")),
                            sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-        utils::write.table(ms2_result$match_log, file.path(output_dir, "plantcyc_ms2_match_log.tsv"),
+        utils::write.table(ms2_result$match_log, file.path(output_dir, paste0(output_prefix, "_ms2_match_log.tsv")),
                            sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-        utils::write.table(ms2_result$unmatched_compounds, file.path(output_dir, "plantcyc_ms2_unmatched_compounds.tsv"),
+        utils::write.table(ms2_result$unmatched_compounds, file.path(output_dir, paste0(output_prefix, "_ms2_unmatched_compounds.tsv")),
                            sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-        utils::write.table(pathway_result$reaction_table, file.path(output_dir, "plantcyc_pathway_reaction_table.tsv"),
+        utils::write.table(pathway_result$reaction_table, file.path(output_dir, paste0(output_prefix, "_pathway_reaction_table.tsv")),
                            sep = "\t", quote = FALSE, row.names = FALSE, na = "")
         if (nrow(classyfire_classification) > 0) {
-          utils::write.table(classyfire_classification, file.path(output_dir, "plantcyc_classyfire_classification.tsv"),
+          utils::write.table(classyfire_classification, file.path(output_dir, paste0(output_prefix, "_classyfire_classification.tsv")),
                              sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-          utils::write.table(clean_result$clean_compounds, file.path(output_dir, "plantcyc_clean_compounds_with_classyfire.tsv"),
+          utils::write.table(clean_result$clean_compounds, file.path(output_dir, paste0(output_prefix, "_clean_compounds_with_classyfire.tsv")),
                              sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-          file.copy(classyfire_local_cache_file, file.path(output_dir, "plantcyc_classyfire_local_cache_snapshot.tsv"), overwrite = TRUE)
+          file.copy(classyfire_local_cache_file, file.path(output_dir, paste0(output_prefix, "_classyfire_local_cache_snapshot.tsv")), overwrite = TRUE)
         }
 
         positive_spectra <- sum(vapply(ms2_db@spectra.data$Spectra.positive, length, integer(1)))
@@ -459,7 +477,7 @@ mod_plantcyc_database_server <- function(id) {
             data.frame(metric = paste0("match_type_", names(type_table)), value = as.integer(type_table))
           )
         }
-        utils::write.table(summary, file.path(output_dir, "plantcyc_database_summary.tsv"),
+        utils::write.table(summary, file.path(output_dir, paste0(output_prefix, "_database_summary.tsv")),
                            sep = "\t", quote = FALSE, row.names = FALSE, na = "")
 
         result <- list(
@@ -473,12 +491,15 @@ mod_plantcyc_database_server <- function(id) {
           coa_fragment_rules = metminer_plantcyc_coa_fragment_rules(),
           classyfire_classification = classyfire_classification,
           summary = summary,
-          output_dir = output_dir
+          output_dir = output_dir,
+          output_prefix = output_prefix,
+          rda_files = rda_files
         )
         state$result <- result
         state$status <- paste0(
           "Completed.\n",
           "Output folder: ", output_dir, "\n",
+          "Output prefix: ", output_prefix, "\n",
           "MS1 compounds: ", nrow(ms1_db@spectra.info), "\n",
           "MS2 compounds: ", nrow(ms2_db@spectra.info), "\n",
           "MS2 spectra: ", positive_spectra + negative_spectra, "\n",
@@ -499,36 +520,49 @@ mod_plantcyc_database_server <- function(id) {
     })
 
     output$download_ms1 <- downloadHandler(
-      filename = function() "plantcyc_ftataricum_ms1.rda",
+      filename = function() {
+        req(state$result)
+        state$result$rda_files$ms1
+      },
       content = function(file) {
         req(state$result)
-        file.copy(file.path(state$result$output_dir, "plantcyc_ftataricum_ms1.rda"), file, overwrite = TRUE)
+        file.copy(file.path(state$result$output_dir, state$result$rda_files$ms1), file, overwrite = TRUE)
       }
     )
 
     output$download_ms2 <- downloadHandler(
-      filename = function() "plantcyc_ftataricum_ms2.rda",
+      filename = function() {
+        req(state$result)
+        state$result$rda_files$ms2
+      },
       content = function(file) {
         req(state$result)
-        file.copy(file.path(state$result$output_dir, "plantcyc_ftataricum_ms2.rda"), file, overwrite = TRUE)
+        file.copy(file.path(state$result$output_dir, state$result$rda_files$ms2), file, overwrite = TRUE)
       }
     )
 
     output$download_pathway <- downloadHandler(
-      filename = function() "plantcyc_ftataricum_pathway.rda",
+      filename = function() {
+        req(state$result)
+        state$result$rda_files$pathway
+      },
       content = function(file) {
         req(state$result)
-        file.copy(file.path(state$result$output_dir, "plantcyc_ftataricum_pathway.rda"), file, overwrite = TRUE)
+        file.copy(file.path(state$result$output_dir, state$result$rda_files$pathway), file, overwrite = TRUE)
       }
     )
 
     output$download_bundle <- downloadHandler(
-      filename = function() paste0("plantcyc_ftataricum_database_", Sys.Date(), ".zip"),
+      filename = function() {
+        req(state$result)
+        paste0(state$result$output_prefix, "_database_", Sys.Date(), ".zip")
+      },
       content = function(file) {
         req(state$result)
         bundle_dir <- tempfile("plantcyc_bundle_")
         dir.create(bundle_dir)
-        files <- list.files(state$result$output_dir, pattern = "\\.(rda|tsv)$", full.names = TRUE)
+        prefix_pattern <- paste0("^", gsub("([][{}()+*^$|\\\\?.])", "\\\\\\1", state$result$output_prefix), ".*\\.(rda|tsv)$")
+        files <- list.files(state$result$output_dir, pattern = prefix_pattern, full.names = TRUE)
         file.copy(files, bundle_dir, overwrite = TRUE)
         old_wd <- setwd(bundle_dir)
         on.exit(setwd(old_wd), add = TRUE)

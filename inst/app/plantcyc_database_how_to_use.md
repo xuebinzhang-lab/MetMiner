@@ -1,6 +1,6 @@
 # PlantCyc Metabolite Database Construction
 
-This toolkit builds species-specific metabolite annotation databases for MetMiner and metID from PlantCyc SmartTable exports. It is designed for workflows where a PlantCyc PGDB contains the species of interest, such as *Fagopyrum tataricum*.
+This toolkit builds species-specific metabolite annotation databases for MetMiner and metID from PlantCyc SmartTable exports. It is designed for workflows where a PlantCyc PGDB contains the species of interest, such as maize or *Fagopyrum tataricum*.
 
 ## What You Need From PlantCyc
 
@@ -10,9 +10,9 @@ Open the PlantCyc PGDB list:
 
 Find the target species database and use PlantCyc SmartTables to export two tab-delimited text files.
 
-![Find the Fagopyrum tataricum PGDB from the PlantCyc PGDB list.](www/plantcyc/01_select_ftataricum_pgdb.png)
+![Find the target species PGDB from the PlantCyc PGDB list.](www/plantcyc/01_select_ftataricum_pgdb.png)
 
-After opening the species PGDB, use the SmartTable buttons in the organism database page. For *Fagopyrum tataricum*, the compound SmartTable can be opened from the `Compounds` row in the database contents table.
+After opening the species PGDB, use the SmartTable buttons in the organism database page. The compound SmartTable can usually be opened from the `Compounds` row in the database contents table.
 
 ![Open the compound SmartTable from the species PGDB page.](www/plantcyc/02_open_compound_smarttable.png)
 
@@ -144,19 +144,19 @@ This is important because downstream pathway enrichment uses the PlantCyc ID sys
 
 ## Output Files
 
-The toolkit writes these files to the selected output folder:
+The toolkit writes files to the selected output folder using the output prefix defined in the app. For maize, the prefix can be set to names such as `plantcyc_maize`, `maize`, `corn`, or `yumi`. The same prefix is used for the file names and for the object names stored inside the `.rda` files.
 
-- `plantcyc_ftataricum_ms1.rda`
-- `plantcyc_ftataricum_ms2.rda`
-- `plantcyc_ftataricum_pathway.rda`
-- `plantcyc_ms1_spectra_info.tsv`
-- `plantcyc_ms2_eligible_compounds.tsv`
-- `plantcyc_ms2_spectra_info.tsv`
-- `plantcyc_ms2_match_log.tsv`
-- `plantcyc_ms2_unmatched_compounds.tsv`
-- `plantcyc_coa_fragment_rules.tsv`
-- `plantcyc_pathway_reaction_table.tsv`
-- `plantcyc_database_summary.tsv`
+- `<prefix>_ms1.rda`
+- `<prefix>_ms2.rda`
+- `<prefix>_pathway.rda`
+- `<prefix>_ms1_spectra_info.tsv`
+- `<prefix>_ms2_eligible_compounds.tsv`
+- `<prefix>_ms2_spectra_info.tsv`
+- `<prefix>_ms2_match_log.tsv`
+- `<prefix>_ms2_unmatched_compounds.tsv`
+- `<prefix>_coa_fragment_rules.tsv`
+- `<prefix>_pathway_reaction_table.tsv`
+- `<prefix>_database_summary.tsv`
 
 The MS1 and MS2 `.rda` files can be used as local metID databases in the MetMiner annotation module. The pathway `.rda` file is a `metpath::pathway_database` object for pathway enrichment using PlantCyc compound IDs.
 

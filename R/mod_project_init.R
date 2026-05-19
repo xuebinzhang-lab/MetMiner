@@ -309,6 +309,16 @@ mod_project_init_server <- function(id, prj_init) {
       }
 
       loaded_objects <- load_metminer_saved_objects(prj_init$wd)
+      if (!is.null(prj_init$sample_info) && length(loaded_objects) > 0) {
+        loaded_objects <- lapply(names(loaded_objects), function(nm) {
+          metminer_harmonize_sample_info(
+            loaded_objects[[nm]],
+            project_sample_info = prj_init$sample_info,
+            mode = paste("restored", nm)
+          )
+        }) |>
+          stats::setNames(names(loaded_objects))
+      }
       prj_init$loaded_objects <- loaded_objects
       prj_init$object_positive.init <- latest_loaded_metminer_object(loaded_objects, "positive")
       prj_init$object_negative.init <- latest_loaded_metminer_object(loaded_objects, "negative")
@@ -406,7 +416,11 @@ mod_project_init_server <- function(id, prj_init) {
           if (!is.null(file_input)) {
             res <- validate_file(file_input$datapath, "Unknown", label)
             if (res$success) {
-              prj_init[[slot_name]] <- res$object
+              prj_init[[slot_name]] <- metminer_harmonize_sample_info(
+                res$object,
+                project_sample_info = prj_init$sample_info,
+                mode = label
+              )
               return(TRUE)
             } else {
               shinyalert::shinyalert("Validation Failed", res$message, type = "error")

@@ -1,0 +1,7 @@
+rule_id	evidence_type	mz	tolerance_da	polarity	description	acceptance_note
+coa_backbone_428	diagnostic_fragment	428.036	0.02	negative_or_positive	Characteristic CoA/ADP backbone fragment. Treat as the strongest diagnostic ion for CoA-related candidates.	Require precursor mass consistency plus this fragment, or multiple supporting CoA fragments, before accepting a CoA candidate.
+adenosine_phosphate_261	supporting_fragment	261	0.05	negative_or_positive	Adenosine phosphate-related fragment supporting a CoA backbone assignment.	Supporting evidence only; do not accept CoA solely from this ion.
+phosphate_related_159	supporting_fragment	159	0.05	negative_or_positive	Phosphate-related fragment supporting a CoA backbone assignment.	Supporting evidence only; do not accept CoA solely from this ion.
+coa_neutral_loss_507	neutral_loss		0.05	negative_or_positive	CoA-related neutral loss; exact expected loss depends on adduct and ionization mode.	Supporting evidence only; verify with observed product ions.
+high_mz_precursor	precursor_context			any	Acyl-CoA candidates usually have high precursor m/z and complex adduct/multiple-charge behavior.	Context only; high m/z is not diagnostic.
+formula_contains_P_S_N	formula_context			any	CoA-related candidates should contain phosphorus, sulfur, and nitrogen in the molecular formula.	Context only; formula pattern is not diagnostic.

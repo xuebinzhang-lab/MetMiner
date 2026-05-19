@@ -90,8 +90,18 @@ app_server <- function(input, output, session) {
   mod_annotation_filter_server("annotation_filter_1", global_data = global_data, prj_init = prj_init)
   # AI-assisted annotation review
   mod_ai_annotation_server("ai_annotation_1", global_data = global_data, prj_init = prj_init)
+  # differential abundance metabolite analysis
+  mod_differential_analysis_server("differential_analysis_1", global_data = global_data, prj_init = prj_init)
+  # pathway enrichment
+  mod_data_enrich_server("data_enrich_1", global_data = global_data, prj_init = prj_init)
+  # LC-MS method-aware parameter advisor
+  mod_parameter_advisor_server("parameter_advisor_1")
   # PlantCyc database construction toolkit
   mod_plantcyc_database_server("plantcyc_database_1")
+  # PlantCyc local licensed PGDB construction toolkit
+  mod_plantcyc_pgdb_builder_server("plantcyc_pgdb_builder_1")
   # KEGG organism database construction toolkit
   mod_kegg_database_server("kegg_database_1")
+  # PlantCyc/KEGG compound ID mapping toolkit
+  mod_id_mapping_server("id_mapping_1")
 }

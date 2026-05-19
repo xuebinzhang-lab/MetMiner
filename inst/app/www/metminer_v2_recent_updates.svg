@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">MetMiner v2 recent development overview</title>
+  <desc id="desc">A 16:9 presentation infographic showing MetMiner v2 updates from feature network to AI annotation and KEGG PlantCyc database construction.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f7faf8"/>
+      <stop offset="58%" stop-color="#eef6f3"/>
+      <stop offset="100%" stop-color="#f7f3ea"/>
+    </linearGradient>
+    <linearGradient id="networkGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1f8a70"/>
+      <stop offset="100%" stop-color="#3aa99e"/>
+    </linearGradient>
+    <linearGradient id="aiGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4b6cb7"/>
+      <stop offset="100%" stop-color="#5c8dd6"/>
+    </linearGradient>
+    <linearGradient id="dbGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#b46b39"/>
+      <stop offset="100%" stop-color="#d7a14a"/>
+    </linearGradient>
+    <filter id="softShadow" x="-12%" y="-12%" width="124%" height="132%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#24403a" flood-opacity="0.13"/>
+    </filter>
+    <marker id="arrow" markerWidth="18" markerHeight="18" refX="13" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 14 6 L 0 12 z" fill="#445c56"/>
+    </marker>
+    <style>
+      .font { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; }
+      .title { font-size: 58px; font-weight: 780; fill: #17362f; letter-spacing: 0; }
+      .subtitle { font-size: 25px; fill: #4b635d; }
+      .cardTitle { font-size: 34px; font-weight: 760; fill: #ffffff; letter-spacing: 0; }
+      .cardKicker { font-size: 18px; font-weight: 720; fill: rgba(255,255,255,0.82); text-transform: uppercase; letter-spacing: 1.6px; }
+      .body { font-size: 23px; fill: #263b36; }
+      .small { font-size: 18px; fill: #5a6e68; }
+      .tag { font-size: 18px; font-weight: 720; fill: #ffffff; }
+      .footerTitle { font-size: 28px; font-weight: 760; fill: #17362f; }
+      .footerText { font-size: 21px; fill: #40544f; }
+      .line { stroke: #445c56; stroke-width: 6; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .thin { stroke: rgba(255,255,255,0.72); stroke-width: 4; fill: none; stroke-linecap: round; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <path d="M0,805 C210,735 352,840 548,782 C770,718 880,630 1120,692 C1325,746 1455,730 1600,650 L1600,900 L0,900 Z" fill="#dfece5" opacity="0.72"/>
+  <path d="M-40,128 C164,82 285,118 455,76 C650,28 814,56 1010,118 C1190,175 1366,146 1648,88" fill="none" stroke="#cfddd6" stroke-width="4" opacity="0.75"/>
+
+  <g class="font">
+    <text class="title" x="92" y="105">MetMiner v2 近期开发更新</text>
+    <text class="subtitle" x="96" y="150">从特征网络降冗余，到 AI 证据解释，再到 KEGG / PlantCyc 物种数据库构建</text>
+
+    <g transform="translate(96 222)">
+      <line class="line" x1="354" y1="184" x2="502" y2="184" marker-end="url(#arrow)"/>
+      <line class="line" x1="858" y1="184" x2="1006" y2="184" marker-end="url(#arrow)"/>
+
+      <g filter="url(#softShadow)">
+        <rect x="0" y="0" width="392" height="368" rx="24" fill="#ffffff"/>
+        <path d="M0,24 Q0,0 24,0 H368 Q392,0 392,24 V132 H0 Z" fill="url(#networkGrad)"/>
+      </g>
+      <g transform="translate(34 29)">
+        <text class="cardKicker" x="0" y="0">Step 1</text>
+        <text class="cardTitle" x="0" y="46">Feature network</text>
+        <circle cx="62" cy="129" r="18" fill="#d9fff4"/>
+        <circle cx="148" cy="84" r="14" fill="#fff7ca"/>
+        <circle cx="214" cy="139" r="16" fill="#d9fff4"/>
+        <circle cx="292" cy="92" r="12" fill="#fff7ca"/>
+        <path class="thin" d="M78,121 L136,91 M164,93 L200,130 M230,130 L282,98 M82,136 L198,142"/>
+      </g>
+      <text class="body" x="34" y="185">• RT-local 共洗脱关系</text>
+      <text class="body" x="34" y="226">• isotope / adduct / ISF 识别</text>
+      <text class="body" x="34" y="267">• recurrent ion 与跨 RT 干扰标记</text>
+      <text class="small" x="34" y="323">输出：非冗余 annotation table + audit table</text>
+
+      <g filter="url(#softShadow)">
+        <rect x="504" y="0" width="392" height="368" rx="24" fill="#ffffff"/>
+        <path d="M504,24 Q504,0 528,0 H872 Q896,0 896,24 V132 H504 Z" fill="url(#aiGrad)"/>
+      </g>
+      <g transform="translate(538 29)">
+        <text class="cardKicker" x="0" y="0">Step 2</text>
+        <text class="cardTitle" x="0" y="46">AI annotation</text>
+        <rect x="2" y="84" width="116" height="66" rx="16" fill="#dfe9ff"/>
+        <rect x="142" y="84" width="168" height="66" rx="16" fill="#e9f3ff"/>
+        <path d="M42,106 h36 M42,128 h54 M180,105 h92 M180,128 h70" stroke="#4b6cb7" stroke-width="6" stroke-linecap="round"/>
+        <path d="M120,117 h24" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+        <path d="M150,109 L166,117 L150,125 Z" fill="#ffffff"/>
+      </g>
+      <text class="body" x="538" y="185">• 结构化证据 bundle</text>
+      <text class="body" x="538" y="226">• MS1 / MS2 / network 共同推理</text>
+      <text class="body" x="538" y="267">• 可选 paper-search 文献上下文</text>
+      <text class="small" x="538" y="323">输出：Verdict、confidence、conflict 与 next checks</text>
+
+      <g filter="url(#softShadow)">
+        <rect x="1008" y="0" width="392" height="368" rx="24" fill="#ffffff"/>
+        <path d="M1008,24 Q1008,0 1032,0 H1376 Q1400,0 1400,24 V132 H1008 Z" fill="url(#dbGrad)"/>
+      </g>
+      <g transform="translate(1042 29)">
+        <text class="cardKicker" x="0" y="0">Step 3</text>
+        <text class="cardTitle" x="0" y="46">KEGG / PlantCyc DB</text>
+        <ellipse cx="68" cy="102" rx="58" ry="17" fill="#fff3d6"/>
+        <path d="M10,102 v47 c0,10 26,18 58,18 s58,-8 58,-18 v-47" fill="#fff3d6" stroke="#ffffff" stroke-width="4"/>
+        <path d="M172,92 C228,54 286,79 302,129 C245,133 202,126 172,92 Z" fill="#d8f0c8"/>
+        <path d="M173,92 C226,103 260,113 301,129" stroke="#7aa35d" stroke-width="5" fill="none" stroke-linecap="round"/>
+      </g>
+      <text class="body" x="1042" y="185">• PlantCyc SmartTable 清洗</text>
+      <text class="body" x="1042" y="226">• KEGG organism 背景构建</text>
+      <text class="body" x="1042" y="267">• MS1 / MS2 / pathway database</text>
+      <text class="small" x="1042" y="323">输出：metID database + metpath pathway database</text>
+    </g>
+
+    <g transform="translate(126 668)">
+      <rect x="0" y="0" width="1348" height="124" rx="20" fill="#ffffff" opacity="0.9" filter="url(#softShadow)"/>
+      <text class="footerTitle" x="38" y="46">共同目标</text>
+      <text class="footerText" x="38" y="86">把 untargeted LC-MS 的原始 feature table 转化为更少冗余、更可解释、更贴近植物物种背景的代谢物证据体系。</text>
+      <g transform="translate(1094 34)">
+        <rect x="0" y="0" width="186" height="44" rx="22" fill="#17362f"/>
+        <text class="tag" x="25" y="29">MetMiner v2</text>
+      </g>
+    </g>
+
+    <text class="small" x="96" y="844">Recent modules: feature network interpretation, AI-assisted annotation review, KEGG / PlantCyc organism database construction</text>
+  </g>
+</svg>

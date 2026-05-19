@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">PlantCyc database construction</title>
+  <desc id="desc">A presentation figure explaining the challenges of using PlantCyc SmartTable exports directly and the MetMiner solution for LC-MS annotation database construction.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f8fbf7"/>
+      <stop offset="58%" stop-color="#eef6f0"/>
+      <stop offset="100%" stop-color="#f7f0e5"/>
+    </linearGradient>
+    <linearGradient id="problemGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#b76435"/>
+      <stop offset="100%" stop-color="#d89b42"/>
+    </linearGradient>
+    <linearGradient id="solutionGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#227c5f"/>
+      <stop offset="100%" stop-color="#55a76c"/>
+    </linearGradient>
+    <linearGradient id="flowGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#236b7a"/>
+      <stop offset="100%" stop-color="#227c5f"/>
+    </linearGradient>
+    <filter id="softShadow" x="-12%" y="-16%" width="124%" height="136%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#2c4038" flood-opacity="0.14"/>
+    </filter>
+    <style>
+      .font { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; }
+      .title { font-size: 56px; font-weight: 800; fill: #14362c; letter-spacing: 0; }
+      .subtitle { font-size: 25px; fill: #4d6259; }
+      .panelTitle { font-size: 34px; font-weight: 780; fill: #fff; letter-spacing: 0; }
+      .panelKicker { font-size: 18px; font-weight: 760; fill: rgba(255,255,255,0.82); letter-spacing: 1.5px; }
+      .body { font-size: 22px; fill: #253b33; }
+      .small { font-size: 18px; fill: #5a7066; }
+      .label { font-size: 20px; font-weight: 740; fill: #183b31; }
+      .mini { font-size: 17px; fill: #4d6259; }
+      .whiteLabel { font-size: 22px; font-weight: 760; fill: #fff; }
+      .whiteMini { font-size: 17px; fill: rgba(255,255,255,0.88); }
+      .flowText { font-size: 19px; font-weight: 720; fill: #183b31; }
+      .tag { font-size: 17px; font-weight: 740; fill: #fff; }
+      .line { stroke: #31534a; stroke-width: 5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <path d="M0,774 C180,718 388,803 566,736 C755,665 930,628 1125,699 C1312,767 1464,736 1600,666 L1600,900 L0,900 Z" fill="#dcebdd" opacity="0.72"/>
+  <path d="M-30,135 C184,80 360,124 555,82 C742,41 918,69 1115,124 C1298,174 1460,140 1644,84" stroke="#d1ded5" stroke-width="4" fill="none" opacity="0.82"/>
+
+  <g class="font">
+    <text class="title" x="86" y="100">PlantCyc species-specific database construction</text>
+    <text class="subtitle" x="90" y="146">核心思想：把 PlantCyc 物种 PGDB 的 SmartTable 导出，转成可用于 MetMiner / metID / metpath 的 LC-MS 数据库</text>
+
+    <g transform="translate(86 205)">
+      <g filter="url(#softShadow)">
+        <rect x="0" y="0" width="640" height="470" rx="24" fill="#ffffff"/>
+        <path d="M0,24 Q0,0 24,0 H616 Q640,0 640,24 V118 H0 Z" fill="url(#problemGrad)"/>
+      </g>
+      <text class="panelKicker" x="34" y="38">PROBLEM</text>
+      <text class="panelTitle" x="34" y="84">PlantCyc 原始导出的痛点</text>
+
+      <g transform="translate(46 151)">
+        <rect x="0" y="0" width="162" height="76" rx="16" fill="#fff4df" stroke="#e9c58a"/>
+        <text class="label" x="29" y="31">Compound</text>
+        <text class="mini" x="27" y="55">formula / MW</text>
+        <line class="line" x1="172" y1="38" x2="207" y2="38"/>
+        <path d="M207,23 L241,38 L207,53 Z" fill="#31534a"/>
+        <rect x="252" y="0" width="136" height="76" rx="16" fill="#fff4df" stroke="#e9c58a"/>
+        <text class="label" x="287" y="31">Pathway</text>
+        <text class="mini" x="274" y="55">compound list</text>
+        <line class="line" x1="398" y1="38" x2="432" y2="38"/>
+        <path d="M432,23 L466,38 L432,53 Z" fill="#31534a"/>
+        <rect x="478" y="0" width="110" height="76" rx="16" fill="#fff4df" stroke="#e9c58a"/>
+        <text class="label" x="506" y="31">LC-MS</text>
+        <text class="mini" x="500" y="55">not ready</text>
+      </g>
+
+      <g transform="translate(48 260)">
+        <circle cx="28" cy="10" r="9" fill="#c67a3a"/>
+        <text class="body" x="54" y="18">SmartTable 需手动选择关键字段；</text>
+        <text class="body" x="54" y="43">名称、HTML、同义词和 ID 需规范化</text>
+        <circle cx="28" cy="66" r="9" fill="#c67a3a"/>
+        <text class="body" x="54" y="74">原始 compound 包含无机离子、currency metabolites、</text>
+        <text class="body" x="54" y="99">反应中间体等噪声</text>
+        <circle cx="28" cy="122" r="9" fill="#c67a3a"/>
+        <text class="body" x="54" y="130">PlantCyc 通常没有 LC-specific RT，</text>
+        <text class="body" x="54" y="155">也不直接提供实验 MS2 谱库</text>
+        <circle cx="28" cy="178" r="9" fill="#c67a3a"/>
+        <text class="body" x="54" y="186">CoA / acyl-CoA 只靠 MS1 容易误报，</text>
+        <text class="body" x="54" y="211">但在 MS2 中又有诊断价值</text>
+      </g>
+
+      <g filter="url(#softShadow)">
+        <rect x="786" y="0" width="640" height="470" rx="24" fill="#ffffff"/>
+        <path d="M786,24 Q786,0 810,0 H1402 Q1426,0 1426,24 V118 H786 Z" fill="url(#solutionGrad)"/>
+      </g>
+      <text class="panelKicker" x="820" y="38">SOLUTION</text>
+      <text class="panelTitle" x="820" y="84">MetMiner 的 PlantCyc 构建流程</text>
+
+      <g transform="translate(824 149)">
+        <rect x="0" y="0" width="124" height="72" rx="16" fill="#eef8ef" stroke="#b9dcbf"/>
+        <text class="flowText" x="22" y="31">PGDB</text>
+        <text class="mini" x="22" y="55">species</text>
+
+        <rect x="158" y="0" width="128" height="72" rx="16" fill="#eef8ef" stroke="#b9dcbf"/>
+        <text class="flowText" x="180" y="31">SmartTable</text>
+        <text class="mini" x="179" y="55">compound + pathway</text>
+
+        <rect x="320" y="0" width="116" height="72" rx="16" fill="#eef8ef" stroke="#b9dcbf"/>
+        <text class="flowText" x="348" y="31">Clean</text>
+        <text class="mini" x="339" y="55">LC-MS rules</text>
+
+        <rect x="470" y="0" width="112" height="72" rx="16" fill="#eef8ef" stroke="#b9dcbf"/>
+        <text class="flowText" x="502" y="31">Build</text>
+        <text class="mini" x="493" y="55">rda outputs</text>
+
+        <line class="line" x1="130" y1="36" x2="146" y2="36"/>
+        <path d="M146,26 L170,36 L146,46 Z" fill="#31534a"/>
+        <line class="line" x1="292" y1="36" x2="308" y2="36"/>
+        <path d="M308,26 L332,36 L308,46 Z" fill="#31534a"/>
+        <line class="line" x1="442" y1="36" x2="458" y2="36"/>
+        <path d="M458,26 L482,36 L458,46 Z" fill="#31534a"/>
+      </g>
+
+      <g transform="translate(850 259)">
+        <rect x="0" y="0" width="540" height="92" rx="18" fill="url(#flowGrad)"/>
+        <text class="whiteLabel" x="32" y="34">Conservative compound matching for MS2</text>
+        <text class="whiteMini" x="32" y="62">InChIKey exact → SMILES + formula/mass</text>
+        <text class="whiteMini" x="32" y="82">→ name/synonym + formula/mass</text>
+      </g>
+
+      <g transform="translate(824 374)">
+        <rect x="0" y="0" width="142" height="58" rx="29" fill="#f5fbf5" stroke="#b9dcbf"/>
+        <text class="flowText" x="30" y="37">MS1 DB</text>
+        <rect x="160" y="0" width="158" height="58" rx="29" fill="#f5fbf5" stroke="#b9dcbf"/>
+        <text class="flowText" x="198" y="37">MS2 DB</text>
+        <rect x="336" y="0" width="196" height="58" rx="29" fill="#f5fbf5" stroke="#b9dcbf"/>
+        <text class="flowText" x="360" y="37">Pathway DB</text>
+      </g>
+    </g>
+
+    <g transform="translate(126 724)" filter="url(#softShadow)">
+      <rect x="0" y="0" width="1348" height="104" rx="20" fill="#ffffff" opacity="0.94"/>
+    </g>
+    <g transform="translate(164 748)">
+      <text class="label" x="0" y="0">最终输出</text>
+      <text class="body" x="0" y="34">PlantCyc MS1-only database、PlantCyc-linked MS2 database、metpath pathway database、</text>
+      <text class="body" x="0" y="66">MS2 match log、unmatched compounds、CoA diagnostic-fragment rules 和 database summary。</text>
+      <rect x="1120" y="-14" width="172" height="44" rx="22" fill="#14362c"/>
+      <text class="tag" x="1152" y="14">MetMiner v2</text>
+    </g>
+  </g>
+</svg>

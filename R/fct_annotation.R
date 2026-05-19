@@ -1,9 +1,54 @@
 # ---- Annotation database helpers ----
 
-#' Built-in metid database metadata
+#' Built-in PlantCyc annotation database metadata
 #'
 #' @noRd
-metminer_builtin_annotation_databases <- function() {
+metminer_builtin_plantcyc_annotation_databases <- function() {
+  manifest <- tryCatch({
+    env <- new.env(parent = emptyenv())
+    if (file.exists(file.path("data", "plantcyc_pgdb_manifest.rda"))) {
+      load(file.path("data", "plantcyc_pgdb_manifest.rda"), envir = env)
+    } else {
+      utils::data(list = "plantcyc_pgdb_manifest", package = "MetMiner", envir = env)
+    }
+    env$plantcyc_pgdb_manifest
+  }, error = function(e) data.frame())
+
+  if (nrow(manifest) == 0 || !"ms1_file" %in% colnames(manifest)) {
+    return(character())
+  }
+
+  ids <- tools::file_path_sans_ext(basename(manifest$ms1_file))
+  labels <- paste0(manifest$organism, " (", manifest$version, ")")
+  stats::setNames(ids, labels)
+}
+
+#' Expand species-level PlantCyc choices to paired MS1 and MS2 database ids
+#'
+#' @noRd
+metminer_expand_builtin_annotation_ids <- function(database_ids) {
+  database_ids <- as.character(database_ids %||% character())
+  if (length(database_ids) == 0) {
+    return(character())
+  }
+  plantcyc_choices <- unname(metminer_builtin_plantcyc_annotation_databases())
+  out <- character()
+  for (database_id in database_ids) {
+    out <- c(out, database_id)
+    if (database_id %in% plantcyc_choices && grepl("_ms1$", database_id)) {
+      ms2_id <- sub("_ms1$", "_ms2", database_id)
+      if (file.exists(file.path("data", paste0(ms2_id, ".rda")))) {
+        out <- c(out, ms2_id)
+      }
+    }
+  }
+  unique(out)
+}
+
+#' Built-in public metid database metadata
+#'
+#' @noRd
+metminer_public_annotation_databases <- function() {
   choices <- c(
     "HMDB MS2" = "hmdb_ms2",
     "MassBank MS2" = "massbank_ms2",
@@ -11,7 +56,7 @@ metminer_builtin_annotation_databases <- function() {
   )
 
   if (!requireNamespace("massdbbuildin", quietly = TRUE)) {
-    return(choices)
+    return(character())
   }
 
   available <- tryCatch({
@@ -24,10 +69,83 @@ metminer_builtin_annotation_databases <- function() {
   choices[choices %in% available]
 }
 
+#' Built-in metid database metadata
+#'
+#' @noRd
+metminer_builtin_annotation_databases <- function() {
+  c(
+    metminer_builtin_plantcyc_annotation_databases(),
+    metminer_public_annotation_databases()
+  )
+}
+
+#' Format annotation database ids as labels
+#'
+#' @noRd
+metminer_annotation_database_labels <- function(database_ids) {
+  database_ids <- database_ids %||% character()
+  if (length(database_ids) == 0) {
+    return(character())
+  }
+  choices <- metminer_builtin_annotation_databases()
+  plantcyc_choices <- metminer_builtin_plantcyc_annotation_databases()
+  ms2_ids <- sub("_ms1$", "_ms2", unname(plantcyc_choices))
+  choices <- c(choices, stats::setNames(ms2_ids, paste0(names(plantcyc_choices), " MS2")))
+  labels <- names(choices)[match(database_ids, unname(choices))]
+  labels[!has_text(labels)] <- database_ids[!has_text(labels)]
+  labels
+}
+
+#' Format database labels with italicized Latin binomials for HTML controls
+#'
+#' @noRd
+metminer_annotation_database_label_html <- function(labels) {
+  labels <- as.character(labels %||% character())
+  vapply(labels, function(label) {
+    escaped <- htmltools::htmlEscape(label)
+    sub(
+      "^([A-Z][a-z]+\\s+[a-z][a-zA-Z._-]*)(.*)$",
+      "<em>\\1</em>\\2",
+      escaped,
+      perl = TRUE
+    )
+  }, character(1), USE.NAMES = FALSE)
+}
+
 #' Load a databaseClass object from massdbbuildin
 #'
 #' @noRd
 metminer_load_builtin_database <- function(database_id) {
+  plantcyc_choices <- metminer_builtin_plantcyc_annotation_databases()
+  plantcyc_ms2_ids <- sub("_ms1$", "_ms2", unname(plantcyc_choices))
+  if (database_id %in% c(unname(plantcyc_choices), plantcyc_ms2_ids)) {
+    env <- new.env(parent = emptyenv())
+    file <- file.path("data", paste0(database_id, ".rda"))
+    object_names <- if (file.exists(file)) {
+      load(file, envir = env)
+    } else {
+      utils::data(list = database_id, package = "MetMiner", envir = env)
+    }
+    if (!database_id %in% object_names && exists(database_id, envir = env, inherits = FALSE)) {
+      object_names <- unique(c(object_names, database_id))
+    }
+    db <- NULL
+    for (object_name in object_names) {
+      obj <- get(object_name, envir = env)
+      if (methods::is(obj, "databaseClass")) {
+        db <- obj
+        break
+      }
+    }
+    if (is.null(db)) {
+      stop("Built-in PlantCyc database is not a metid databaseClass object: ", database_id, call. = FALSE)
+    }
+    label <- names(plantcyc_choices)[match(sub("_ms2$", "_ms1", database_id), unname(plantcyc_choices))]
+    if (!has_text(label)) label <- metminer_database_label(db, database_id)
+    label <- paste(label, if (grepl("_ms2$", database_id)) "MS2" else "MS1")
+    return(list(id = database_id, label = label, database = db))
+  }
+
   if (!requireNamespace("massdbbuildin", quietly = TRUE)) {
     stop("Package 'massdbbuildin' is required for built-in databases.", call. = FALSE)
   }
@@ -47,7 +165,7 @@ metminer_load_builtin_database <- function(database_id) {
 #'
 #' @noRd
 metminer_load_local_databases <- function(directory) {
-  if (!has_text(directory)) {
+  if (is.null(directory) || length(directory) == 0 || !has_text(directory)) {
     return(list())
   }
   directory <- as.character(directory)[1]
@@ -100,7 +218,7 @@ metminer_database_label <- function(database, fallback = "database") {
 #'
 #' @noRd
 metminer_collect_annotation_databases <- function(builtin_ids = character(), local_dir = NULL) {
-  builtin_ids <- builtin_ids %||% character()
+  builtin_ids <- metminer_expand_builtin_annotation_ids(builtin_ids)
   dbs <- c(
     lapply(builtin_ids, metminer_load_builtin_database),
     metminer_load_local_databases(local_dir)
@@ -1401,4 +1519,424 @@ metminer_eic_sample_choices <- function(eic_data, object = NULL) {
     }
   }
   stats::setNames(samples, labels)
+}
+
+# ---- Annotation filtering review tables ----
+
+#' Normalize adduct labels for priority matching
+#'
+#' @noRd
+metminer_normalize_adduct_label <- function(x) {
+  x <- trimws(as.character(x %||% ""))
+  x <- gsub("\\s+", "", x)
+  x <- gsub("[M-H2O+H]+", "[M+H-H2O]+", x, fixed = TRUE)
+  x <- gsub("[M-H2O-H]-", "[M-H-H2O]-", x, fixed = TRUE)
+  x <- gsub("[M+FA-H]-", "[M+HCOO]-", x, fixed = TRUE)
+  x <- gsub("[M+Hac-H]-", "[M+CH3COO]-", x, fixed = TRUE)
+  x
+}
+
+#' Default adduct-priority set used when no advisor file is supplied
+#'
+#' @noRd
+metminer_default_adduct_advice <- function() {
+  list(
+    positive_core = c("[M+H]+", "[M+Na]+"),
+    positive_optional = c("[M+K]+", "[M+H-H2O]+", "[2M+H]+", "[2M+Na]+"),
+    negative_core = c("[M-H]-", "[M+HCOO]-"),
+    negative_optional = c("[M+Cl]-", "[M-H-H2O]-", "[M-H2O-H]-", "[2M-H]-", "[M+CH3COO]-")
+  )
+}
+
+metminer_split_adduct_recommendation <- function(x) {
+  x <- paste(as.character(x %||% ""), collapse = ",")
+  x <- unlist(strsplit(x, ",|;", perl = TRUE), use.names = FALSE)
+  x <- metminer_normalize_adduct_label(x)
+  unique(x[has_text(x)])
+}
+
+#' Read parameter-advisor JSON/TSV/CSV and return adduct priority lists
+#'
+#' @noRd
+metminer_read_parameter_adduct_advice <- function(path = NULL) {
+  advice <- metminer_default_adduct_advice()
+  if (is.null(path) || !has_text(path) || !file.exists(path)) {
+    return(advice)
+  }
+
+  ext <- tolower(tools::file_ext(path))
+  tab <- tryCatch({
+    if (identical(ext, "json")) {
+      if (!requireNamespace("jsonlite", quietly = TRUE)) {
+        stop("Package 'jsonlite' is required to read parameter advice JSON.", call. = FALSE)
+      }
+      parsed <- jsonlite::fromJSON(path, simplifyDataFrame = TRUE)
+      parsed$advice %||% parsed
+    } else if (identical(ext, "csv")) {
+      utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+    } else {
+      utils::read.delim(path, stringsAsFactors = FALSE, check.names = FALSE)
+    }
+  }, error = function(e) NULL)
+
+  if (is.null(tab) || nrow(tab) == 0 || !"parameter" %in% colnames(tab) || !"recommendation" %in% colnames(tab)) {
+    return(advice)
+  }
+
+  get_row <- function(label) {
+    idx <- which(tolower(tab$parameter) == tolower(label))
+    if (length(idx) == 0) return(character())
+    metminer_split_adduct_recommendation(tab$recommendation[idx[1]])
+  }
+
+  update_if_present <- function(name, value) {
+    if (length(value) > 0) {
+      advice[[name]] <<- value
+    }
+  }
+
+  update_if_present("positive_core", get_row("Positive core adducts"))
+  update_if_present("positive_optional", get_row("Positive optional adducts"))
+  update_if_present("negative_core", get_row("Negative core adducts"))
+  update_if_present("negative_optional", get_row("Negative optional adducts"))
+  advice
+}
+
+metminer_format_adduct_advice <- function(advice) {
+  advice <- advice %||% metminer_default_adduct_advice()
+  paste0(
+    "Positive core: ", paste(advice$positive_core, collapse = ", "), "\n",
+    "Positive optional: ", paste(advice$positive_optional, collapse = ", "), "\n",
+    "Negative core: ", paste(advice$negative_core, collapse = ", "), "\n",
+    "Negative optional: ", paste(advice$negative_optional, collapse = ", ")
+  )
+}
+
+metminer_annotation_adduct_priority <- function(adduct, mode = c("positive", "negative"), advice = NULL) {
+  mode <- match.arg(mode)
+  advice <- advice %||% metminer_default_adduct_advice()
+  adduct <- metminer_normalize_adduct_label(adduct)
+  core <- metminer_normalize_adduct_label(advice[[paste0(mode, "_core")]] %||% character())
+  optional <- metminer_normalize_adduct_label(advice[[paste0(mode, "_optional")]] %||% character())
+  out <- rep(3L, length(adduct))
+  out[adduct %in% optional] <- 2L
+  out[adduct %in% core] <- 1L
+  out[!has_text(adduct)] <- 4L
+  out
+}
+
+metminer_empty_annotation_review_table <- function(type = c("expand", "collapse")) {
+  type <- match.arg(type)
+  cols <- c(
+    "Variable_id", "mz", "rt", "ms2_spectrum_id", "Compound.name",
+    "KEGG.ID", "PlantCyc.ID", "Lab.ID", "Adduct", "mz.error", "mz.match.score",
+    "Total.score", "Database", "Level", "Sub_net_id"
+  )
+  if (identical(type, "expand")) {
+    cols <- c(cols, "coelution_type", "Represent_feature", "mode", "annotation_rank", "adduct_priority")
+  }
+  stats::setNames(as.data.frame(matrix(nrow = 0, ncol = length(cols)), stringsAsFactors = FALSE), cols)
+}
+
+metminer_ensure_columns <- function(x, cols, fill = NA) {
+  x <- as.data.frame(x %||% data.frame(), stringsAsFactors = FALSE)
+  missing_cols <- setdiff(cols, colnames(x))
+  for (col in missing_cols) {
+    x[[col]] <- fill
+  }
+  x
+}
+
+metminer_standardize_review_annotation_cols <- function(x) {
+  needed <- c(
+    "variable_id", "Compound.name", "KEGG.ID", "PlantCyc.ID", "BIOCYC.ID", "Lab.ID", "Adduct",
+    "mz.error", "mz.match.score", "Total.score", "Database", "Level",
+    "ms2_spectrum_id"
+  )
+  for (col in needed) {
+    if (!col %in% colnames(x)) {
+      x[[col]] <- NA
+    }
+  }
+  x
+}
+
+metminer_read_compound_id_mapping <- function(path = NULL) {
+  if (is.null(path) || !has_text(path) || !file.exists(path)) {
+    return(data.frame())
+  }
+  ext <- tolower(tools::file_ext(path))
+  tab <- tryCatch({
+    if (identical(ext, "xlsx")) {
+      if (!requireNamespace("readxl", quietly = TRUE)) {
+        stop("Package 'readxl' is required to read Excel mapping files.", call. = FALSE)
+      }
+      readxl::read_excel(path, sheet = 1)
+    } else if (identical(ext, "csv")) {
+      utils::read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+    } else {
+      utils::read.delim(path, stringsAsFactors = FALSE, check.names = FALSE)
+    }
+  }, error = function(e) data.frame())
+  tab <- as.data.frame(tab, stringsAsFactors = FALSE)
+  if (nrow(tab) == 0) return(tab)
+  if (!"PlantCyc.ID" %in% colnames(tab) && "BIOCYC.ID" %in% colnames(tab)) {
+    tab$PlantCyc.ID <- tab$BIOCYC.ID
+  }
+  if (!all(c("PlantCyc.ID", "KEGG.ID") %in% colnames(tab))) {
+    return(data.frame())
+  }
+  tab$PlantCyc.ID <- trimws(as.character(tab$PlantCyc.ID))
+  tab$KEGG.ID <- trimws(as.character(tab$KEGG.ID))
+  tab <- tab[has_text(tab$PlantCyc.ID) & has_text(tab$KEGG.ID), , drop = FALSE]
+  tab <- tab[!duplicated(paste(tab$PlantCyc.ID, tab$KEGG.ID, sep = "\r")), , drop = FALSE]
+  rownames(tab) <- NULL
+  tab
+}
+
+metminer_apply_compound_id_mapping <- function(x, mapping = NULL) {
+  if (is.null(x) || nrow(x) == 0) return(x)
+  if (!"PlantCyc.ID" %in% colnames(x)) x$PlantCyc.ID <- NA_character_
+  if (!"KEGG.ID" %in% colnames(x)) x$KEGG.ID <- NA_character_
+  if (is.null(mapping) || nrow(mapping) == 0 || !all(c("PlantCyc.ID", "KEGG.ID") %in% colnames(mapping))) {
+    return(x)
+  }
+
+  lab <- trimws(as.character(x$Lab.ID %||% NA_character_))
+  kegg <- trimws(as.character(x$KEGG.ID %||% NA_character_))
+  plant <- trimws(as.character(x$PlantCyc.ID %||% NA_character_))
+  plant[!has_text(plant) & has_text(lab) & !grepl("^C[0-9]{5}$", lab, perl = TRUE)] <- lab[!has_text(plant) & has_text(lab) & !grepl("^C[0-9]{5}$", lab, perl = TRUE)]
+  kegg[!has_text(kegg) & has_text(lab) & grepl("^C[0-9]{5}$", lab, perl = TRUE)] <- lab[!has_text(kegg) & has_text(lab) & grepl("^C[0-9]{5}$", lab, perl = TRUE)]
+
+  k_by_plant <- stats::setNames(mapping$KEGG.ID, mapping$PlantCyc.ID)
+  p_by_kegg <- stats::setNames(mapping$PlantCyc.ID, mapping$KEGG.ID)
+  fill_k <- !has_text(kegg) & has_text(plant) & plant %in% names(k_by_plant)
+  kegg[fill_k] <- unname(k_by_plant[plant[fill_k]])
+  fill_p <- !has_text(plant) & has_text(kegg) & kegg %in% names(p_by_kegg)
+  plant[fill_p] <- unname(p_by_kegg[kegg[fill_p]])
+
+  x$KEGG.ID <- kegg
+  x$PlantCyc.ID <- plant
+  x
+}
+
+metminer_select_top_annotation_candidates <- function(object, mode = c("positive", "negative"),
+                                                      top_n = 3, adduct_advice = NULL) {
+  mode <- match.arg(mode)
+  annotation_table <- metminer_safe_extract_annotation_table(object)
+  if (is.null(annotation_table) || nrow(annotation_table) == 0) {
+    return(data.frame())
+  }
+  candidates <- metminer_standardize_review_annotation_cols(as.data.frame(annotation_table, stringsAsFactors = FALSE))
+  if (!"variable_id" %in% colnames(candidates)) {
+    return(data.frame())
+  }
+
+  candidates$variable_id <- as.character(candidates$variable_id)
+  candidates$Level <- suppressWarnings(as.integer(candidates$Level))
+  candidates$Total.score <- suppressWarnings(as.numeric(candidates$Total.score))
+  candidates$adduct_priority <- metminer_annotation_adduct_priority(candidates$Adduct, mode, adduct_advice)
+  candidates$mode <- mode
+
+  candidates <- candidates[order(
+    candidates$variable_id,
+    candidates$Level,
+    -candidates$Total.score,
+    candidates$adduct_priority,
+    na.last = TRUE
+  ), , drop = FALSE]
+  candidates$annotation_rank <- ave(seq_len(nrow(candidates)), candidates$variable_id, FUN = seq_along)
+  candidates <- candidates[candidates$annotation_rank <= max(1L, as.integer(top_n %||% 3L)), , drop = FALSE]
+  rownames(candidates) <- NULL
+  candidates
+}
+
+metminer_object_review_rows <- function(object, mode = c("positive", "negative"), top_n = 3,
+                                        adduct_advice = NULL) {
+  mode <- match.arg(mode)
+  if (is.null(object)) {
+    return(metminer_empty_annotation_review_table("expand"))
+  }
+
+  variable_info <- metminer_safe_extract_variable_info(object)
+  if (is.null(variable_info) || nrow(variable_info) == 0 || !"variable_id" %in% colnames(variable_info)) {
+    return(metminer_empty_annotation_review_table("expand"))
+  }
+  variable_info <- as.data.frame(variable_info, stringsAsFactors = FALSE)
+  variable_info$variable_id <- as.character(variable_info$variable_id)
+  for (col in c("mz", "rt", "ms2_spectrum_id")) {
+    if (!col %in% colnames(variable_info)) {
+      variable_info[[col]] <- NA
+    }
+  }
+
+  roles <- tryCatch(metminer_extract_annotation_validation(object)$feature_role_interpretation, error = function(e) data.frame())
+  if (is.null(roles) || nrow(roles) == 0) {
+    network <- normalize_feature_network(extract_feature_network(object))
+    membership <- annotation_network_membership(network, variable_info$variable_id)
+    roles <- data.frame(
+      sub_network = unname(membership[variable_info$variable_id]),
+      feature_id = variable_info$variable_id,
+      parent_feature_id = variable_info$variable_id,
+      network_role = "single_feature",
+      annotation_interpretation = "single_feature_without_network_role",
+      stringsAsFactors = FALSE
+    )
+  }
+
+  roles <- as.data.frame(roles, stringsAsFactors = FALSE)
+  if (!"feature_id" %in% colnames(roles)) {
+    return(metminer_empty_annotation_review_table("expand"))
+  }
+  roles$feature_id <- as.character(roles$feature_id)
+  for (col in c("sub_network", "parent_feature_id", "network_role", "annotation_interpretation")) {
+    if (!col %in% colnames(roles)) {
+      roles[[col]] <- NA_character_
+    }
+  }
+
+  top <- metminer_select_top_annotation_candidates(object, mode, top_n, adduct_advice)
+  role_features <- unique(roles$feature_id)
+  missing_role_top <- setdiff(role_features, top$variable_id %||% character())
+  if (nrow(top) > 0 && length(missing_role_top) > 0) {
+    blank <- metminer_standardize_review_annotation_cols(data.frame(variable_id = missing_role_top, stringsAsFactors = FALSE))
+    blank <- metminer_ensure_columns(blank, colnames(top))
+    blank$adduct_priority <- NA_integer_
+    blank$mode <- mode
+    blank$annotation_rank <- NA_integer_
+    top <- rbind(top, blank[, colnames(top), drop = FALSE])
+  }
+  if (nrow(top) == 0) {
+    top <- metminer_standardize_review_annotation_cols(data.frame(variable_id = variable_info$variable_id, stringsAsFactors = FALSE))
+    top$adduct_priority <- NA_integer_
+    top$mode <- mode
+    top$annotation_rank <- NA_integer_
+  }
+
+  merged <- merge(
+    top,
+    variable_info[, unique(c("variable_id", "mz", "rt", "ms2_spectrum_id")), drop = FALSE],
+    by = "variable_id",
+    all.x = TRUE,
+    suffixes = c("", ".feature")
+  )
+  for (col in c("mz", "rt", "ms2_spectrum_id")) {
+    fcol <- paste0(col, ".feature")
+    if (fcol %in% colnames(merged)) {
+      merged[[col]] <- merged[[col]] %||% merged[[fcol]]
+      idx <- is.na(merged[[col]]) | !has_text(merged[[col]])
+      merged[[col]][idx] <- merged[[fcol]][idx]
+      merged[[fcol]] <- NULL
+    }
+  }
+
+  merged <- merge(
+    merged,
+    roles[, unique(c("feature_id", "sub_network", "parent_feature_id", "network_role", "annotation_interpretation")), drop = FALSE],
+    by.x = "variable_id",
+    by.y = "feature_id",
+    all.x = TRUE
+  )
+
+  out <- data.frame(
+    Variable_id = merged$variable_id,
+    mz = suppressWarnings(as.numeric(merged$mz)),
+    rt = suppressWarnings(as.numeric(merged$rt)),
+    ms2_spectrum_id = merged$ms2_spectrum_id,
+    Compound.name = merged$Compound.name,
+    KEGG.ID = merged$KEGG.ID,
+    PlantCyc.ID = ifelse(has_text(merged$PlantCyc.ID), merged$PlantCyc.ID, merged$BIOCYC.ID),
+    Lab.ID = merged$Lab.ID,
+    Adduct = merged$Adduct,
+    mz.error = merged$mz.error,
+    mz.match.score = merged$mz.match.score,
+    Total.score = suppressWarnings(as.numeric(merged$Total.score)),
+    Database = merged$Database,
+    Level = suppressWarnings(as.integer(merged$Level)),
+    Sub_net_id = merged$sub_network,
+    coelution_type = ifelse(has_text(merged$annotation_interpretation), merged$annotation_interpretation, merged$network_role),
+    Represent_feature = ifelse(has_text(merged$parent_feature_id), merged$parent_feature_id, merged$variable_id),
+    mode = mode,
+    annotation_rank = merged$annotation_rank,
+    adduct_priority = merged$adduct_priority,
+    stringsAsFactors = FALSE
+  )
+
+  out <- out[order(out$Sub_net_id, out$Represent_feature, out$Variable_id, out$annotation_rank, na.last = TRUE), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
+metminer_collapse_annotation_review_table <- function(expand_table) {
+  if (is.null(expand_table) || nrow(expand_table) == 0) {
+    return(metminer_empty_annotation_review_table("collapse"))
+  }
+
+  x <- metminer_ensure_columns(
+    expand_table,
+    c(
+      "Variable_id", "mz", "rt", "ms2_spectrum_id", "Compound.name",
+      "KEGG.ID", "PlantCyc.ID", "Lab.ID", "Adduct", "mz.error", "mz.match.score",
+      "Total.score", "Database", "Level", "Sub_net_id",
+      "Represent_feature", "adduct_priority", "annotation_rank"
+    )
+  )
+  x$Sub_net_id[!has_text(x$Sub_net_id)] <- paste0("single_", x$Variable_id[!has_text(x$Sub_net_id)])
+  x$is_represent <- as.character(x$Variable_id) == as.character(x$Represent_feature)
+  x$Level_sort <- suppressWarnings(as.integer(x$Level))
+  x$Level_sort[is.na(x$Level_sort)] <- 99L
+  x$Score_sort <- suppressWarnings(as.numeric(x$Total.score))
+  x$Score_sort[is.na(x$Score_sort)] <- -Inf
+  x$Adduct_sort <- suppressWarnings(as.integer(x$adduct_priority))
+  x$Adduct_sort[is.na(x$Adduct_sort)] <- 99L
+  x$Rank_sort <- suppressWarnings(as.integer(x$annotation_rank))
+  x$Rank_sort[is.na(x$Rank_sort)] <- 99L
+
+  idx <- vapply(split(seq_len(nrow(x)), x$Sub_net_id), function(ii) {
+    ii[order(
+      !x$is_represent[ii],
+      x$Level_sort[ii],
+      -x$Score_sort[ii],
+      x$Adduct_sort[ii],
+      x$Rank_sort[ii],
+      na.last = TRUE
+    )[1]]
+  }, integer(1))
+
+  out <- x[idx, c(
+    "Variable_id", "mz", "rt", "ms2_spectrum_id", "Compound.name",
+    "KEGG.ID", "PlantCyc.ID", "Lab.ID", "Adduct", "mz.error", "mz.match.score",
+    "Total.score", "Database", "Level", "Sub_net_id"
+  ), drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
+#' Build human-review annotation filtering tables
+#'
+#' @noRd
+metminer_build_annotation_review_tables <- function(positive_object = NULL, negative_object = NULL,
+                                                    top_n = 3, adduct_advice = NULL,
+                                                    id_mapping = NULL) {
+  adduct_advice <- adduct_advice %||% metminer_default_adduct_advice()
+  pos <- metminer_object_review_rows(positive_object, "positive", top_n, adduct_advice)
+  neg <- metminer_object_review_rows(negative_object, "negative", top_n, adduct_advice)
+  expand <- rbind(pos, neg)
+  expand <- metminer_apply_compound_id_mapping(expand, id_mapping)
+  expand_cols <- c(
+    "Variable_id", "mz", "rt", "ms2_spectrum_id", "Compound.name",
+    "KEGG.ID", "PlantCyc.ID", "Lab.ID", "Adduct", "mz.error", "mz.match.score",
+    "Total.score", "Database", "Level", "Sub_net_id",
+    "coelution_type", "Represent_feature", "mode", "annotation_rank", "adduct_priority"
+  )
+  expand <- metminer_ensure_columns(expand, expand_cols)
+  if (nrow(expand) > 0) {
+    expand <- expand[, expand_cols, drop = FALSE]
+  }
+  collapse <- metminer_collapse_annotation_review_table(expand)
+  list(
+    expand_table = expand,
+    collapse_table = collapse,
+    adduct_advice = adduct_advice
+  )
 }

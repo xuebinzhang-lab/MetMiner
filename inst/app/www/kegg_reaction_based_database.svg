@@ -1,0 +1,145 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">KEGG reaction based compound database</title>
+  <desc id="desc">A presentation figure explaining the problem of using broad KEGG pathway compound lists and the MetMiner solution based on organism gene KO EC supported reactions.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f7fbfa"/>
+      <stop offset="62%" stop-color="#eef6f4"/>
+      <stop offset="100%" stop-color="#f8f2e7"/>
+    </linearGradient>
+    <linearGradient id="problemGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#c24b3f"/>
+      <stop offset="100%" stop-color="#df8a52"/>
+    </linearGradient>
+    <linearGradient id="solutionGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#19856f"/>
+      <stop offset="100%" stop-color="#3da78f"/>
+    </linearGradient>
+    <linearGradient id="flowGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1f6f8b"/>
+      <stop offset="100%" stop-color="#19856f"/>
+    </linearGradient>
+    <filter id="softShadow" x="-12%" y="-16%" width="124%" height="136%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#25413b" flood-opacity="0.14"/>
+    </filter>
+    <marker id="arrow" markerWidth="16" markerHeight="16" refX="12" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L13,5 L0,10 Z" fill="#31534c"/>
+    </marker>
+    <style>
+      .font { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", Arial, sans-serif; }
+      .title { font-size: 56px; font-weight: 800; fill: #14342e; letter-spacing: 0; }
+      .subtitle { font-size: 25px; fill: #4d625d; }
+      .panelTitle { font-size: 34px; font-weight: 780; fill: #fff; letter-spacing: 0; }
+      .panelKicker { font-size: 18px; font-weight: 760; fill: rgba(255,255,255,0.82); letter-spacing: 1.5px; }
+      .body { font-size: 22px; fill: #253b35; }
+      .small { font-size: 18px; fill: #5b706a; }
+      .label { font-size: 20px; font-weight: 740; fill: #183b34; }
+      .mini { font-size: 17px; fill: #4d625d; }
+      .whiteLabel { font-size: 22px; font-weight: 760; fill: #fff; }
+      .whiteMini { font-size: 17px; fill: rgba(255,255,255,0.86); }
+      .flowText { font-size: 19px; font-weight: 720; fill: #183b34; }
+      .tag { font-size: 17px; font-weight: 740; fill: #fff; }
+      .line { stroke: #31534c; stroke-width: 5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .thin { stroke: #7da49a; stroke-width: 3.5; fill: none; stroke-linecap: round; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <path d="M0,772 C190,725 375,795 560,735 C780,664 930,640 1118,700 C1314,762 1465,737 1600,662 L1600,900 L0,900 Z" fill="#ddebe5" opacity="0.7"/>
+  <path d="M-30,140 C205,74 390,132 585,86 C778,41 944,74 1130,122 C1304,166 1444,144 1645,80" stroke="#d0ded8" stroke-width="4" fill="none" opacity="0.8"/>
+
+  <g class="font">
+    <text class="title" x="86" y="100">KEGG reaction-based compound database</text>
+    <text class="subtitle" x="90" y="146">核心思想：不用“参考通路全部化合物”直接做背景，而是用物种基因 / KO / EC 支持的反应反推化合物</text>
+
+    <g transform="translate(86 205)">
+      <g filter="url(#softShadow)">
+        <rect x="0" y="0" width="640" height="470" rx="24" fill="#ffffff"/>
+        <path d="M0,24 Q0,0 24,0 H616 Q640,0 640,24 V118 H0 Z" fill="url(#problemGrad)"/>
+      </g>
+      <text class="panelKicker" x="34" y="38">PROBLEM</text>
+      <text class="panelTitle" x="34" y="84">KEGG 构建的常见问题</text>
+
+      <g transform="translate(40 154)">
+        <rect x="0" y="0" width="246" height="96" rx="16" fill="#fff0e8" stroke="#efc2ad"/>
+        <text class="label" x="24" y="38">Reference pathway</text>
+        <text class="mini" x="24" y="68">map 通路包含通用知识</text>
+        <rect x="354" y="0" width="216" height="96" rx="16" fill="#fff0e8" stroke="#efc2ad"/>
+        <text class="label" x="378" y="38">Compound list</text>
+        <text class="mini" x="378" y="68">可能过宽、非物种特异</text>
+        <line class="line" x1="252" y1="48" x2="324" y2="48"/>
+        <path d="M324,31 L364,48 L324,65 Z" fill="#31534c"/>
+      </g>
+
+      <g transform="translate(48 286)">
+        <circle cx="28" cy="10" r="9" fill="#d35d45"/>
+        <text class="body" x="54" y="18">把所有 reference compounds 纳入背景，</text>
+        <text class="body" x="54" y="48">容易引入该物种没有证据支持的代谢物</text>
+        <circle cx="28" cy="66" r="9" fill="#d35d45"/>
+        <text class="body" x="54" y="74">ATP、H2O、NADH 等 hub / currency compounds</text>
+        <text class="body" x="54" y="104">会放大虚假 pathway enrichment</text>
+        <circle cx="28" cy="130" r="9" fill="#d35d45"/>
+        <text class="body" x="54" y="138">只有 pathway 名称存在，不代表关键反应</text>
+        <text class="body" x="54" y="168">在目标物种中被支持</text>
+      </g>
+
+      <g filter="url(#softShadow)">
+        <rect x="786" y="0" width="640" height="470" rx="24" fill="#ffffff"/>
+        <path d="M786,24 Q786,0 810,0 H1402 Q1426,0 1426,24 V118 H786 Z" fill="url(#solutionGrad)"/>
+      </g>
+      <text class="panelKicker" x="820" y="38">SOLUTION</text>
+      <text class="panelTitle" x="820" y="84">MetMiner 的 reaction-supported 解法</text>
+
+      <g transform="translate(824 151)">
+        <rect x="0" y="0" width="132" height="72" rx="16" fill="#e9f6f2" stroke="#b9ded4"/>
+        <text class="flowText" x="29" y="31">Organism</text>
+        <text class="mini" x="30" y="55">zma / ath...</text>
+
+        <rect x="168" y="0" width="112" height="72" rx="16" fill="#e9f6f2" stroke="#b9ded4"/>
+        <text class="flowText" x="202" y="31">Gene</text>
+        <text class="mini" x="190" y="55">pathway genes</text>
+
+        <rect x="316" y="0" width="102" height="72" rx="16" fill="#e9f6f2" stroke="#b9ded4"/>
+        <text class="flowText" x="344" y="31">KO / EC</text>
+        <text class="mini" x="336" y="55">enzyme links</text>
+
+        <rect x="454" y="0" width="128" height="72" rx="16" fill="#e9f6f2" stroke="#b9ded4"/>
+        <text class="flowText" x="486" y="31">Reaction</text>
+        <text class="mini" x="486" y="55">R numbers</text>
+
+        <line class="line" x1="138" y1="36" x2="154" y2="36"/>
+        <path d="M154,26 L178,36 L154,46 Z" fill="#31534c"/>
+        <line class="line" x1="286" y1="36" x2="302" y2="36"/>
+        <path d="M302,26 L326,36 L302,46 Z" fill="#31534c"/>
+        <line class="line" x1="424" y1="36" x2="440" y2="36"/>
+        <path d="M440,26 L464,36 L440,46 Z" fill="#31534c"/>
+      </g>
+
+      <g transform="translate(850 259)">
+        <rect x="0" y="0" width="540" height="84" rx="18" fill="url(#flowGrad)"/>
+        <text class="whiteLabel" x="32" y="34">Reaction → Compound</text>
+        <text class="whiteMini" x="32" y="62">只保留 gene / KO / EC 证据支持的反应所连接的 KEGG compounds</text>
+      </g>
+
+      <g transform="translate(832 374)">
+        <rect x="0" y="0" width="168" height="58" rx="29" fill="#f2fbf8" stroke="#b9ded4"/>
+        <text class="flowText" x="30" y="37">LC-MS filter</text>
+        <rect x="188" y="0" width="160" height="58" rx="29" fill="#f2fbf8" stroke="#b9ded4"/>
+        <text class="flowText" x="225" y="37">MS1 / MS2</text>
+        <rect x="368" y="0" width="214" height="58" rx="29" fill="#f2fbf8" stroke="#b9ded4"/>
+        <text class="flowText" x="395" y="37">Pathway QC prompt</text>
+      </g>
+    </g>
+
+    <g transform="translate(126 724)" filter="url(#softShadow)">
+      <rect x="0" y="0" width="1348" height="104" rx="20" fill="#ffffff" opacity="0.94"/>
+    </g>
+    <g transform="translate(164 748)">
+      <text class="label" x="0" y="0">最终输出</text>
+      <text class="body" x="0" y="34">物种特异 KEGG MS1 database、从 massdbbuildin 提取的 MS2 database、reaction-supported pathway database，</text>
+      <text class="body" x="0" y="66">以及弱支持通路的 QC / AI review prompt。</text>
+      <rect x="1120" y="-14" width="172" height="44" rx="22" fill="#14342e"/>
+      <text class="tag" x="1152" y="14">MetMiner v2</text>
+    </g>
+  </g>
+</svg>

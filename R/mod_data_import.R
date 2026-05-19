@@ -194,7 +194,8 @@ mod_data_import_ui <- function(id) {
                       col_widths = c(12),
                       bslib::navset_card_tab(
                         bslib::nav_panel("Expression Data", DT::dataTableOutput(ns("preview_expmat"))),
-                        bslib::nav_panel("Variable Info", DT::dataTableOutput(ns("preview_varinfo")))
+                        bslib::nav_panel("Variable Info", DT::dataTableOutput(ns("preview_varinfo"))),
+                        bslib::nav_panel("Sample Info", DT::dataTableOutput(ns("preview_sampleinfo")))
                       )
                     )
                   ),
@@ -243,7 +244,8 @@ mod_data_import_ui <- function(id) {
                   col_widths = c(12),
                   bslib::navset_card_tab(
                     bslib::nav_panel("Expression Data", DT::dataTableOutput(ns("preview_expmat_tbl"))),
-                    bslib::nav_panel("Variable Info", DT::dataTableOutput(ns("preview_varinfo_tbl")))
+                    bslib::nav_panel("Variable Info", DT::dataTableOutput(ns("preview_varinfo_tbl"))),
+                    bslib::nav_panel("Sample Info", DT::dataTableOutput(ns("preview_sampleinfo_tbl")))
                   )
                 )
               )
@@ -577,6 +579,12 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
             res_file <- file.path(state$raw_ms1_dir, "POS", "Result", "object")
             if(file.exists(res_file)) {
               load(res_file)
+              object <- metminer_harmonize_sample_info(
+                object,
+                project_sample_info = prj_init$sample_info,
+                mode = "POS raw",
+                logger = log_msg
+              )
               data_import$object_pos_raw <- object
               global_data$object_pos_raw <- object # SYNC TO GLOBAL
               object_pos_raw <- data_import$object_pos_raw
@@ -601,6 +609,12 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
             res_file <- file.path(state$raw_ms1_dir, "NEG", "Result", "object")
             if(file.exists(res_file)) {
               load(res_file)
+              object <- metminer_harmonize_sample_info(
+                object,
+                project_sample_info = prj_init$sample_info,
+                mode = "NEG raw",
+                logger = log_msg
+              )
               data_import$object_neg_raw <- object
               global_data$object_neg_raw <- object # SYNC TO GLOBAL
               object_neg_raw <- data_import$object_neg_raw
@@ -727,8 +741,14 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
       if(!is.null(input$pos_obj_mass)) {
         res <- validate_file(input$pos_obj_mass$datapath, "positive", "POS File")
         if(res$success) {
-          data_import$object_pos_raw <- res$object
-          global_data$object_pos_raw <- res$object # SYNC TO GLOBAL
+          object <- metminer_harmonize_sample_info(
+            res$object,
+            project_sample_info = prj_init$sample_info,
+            mode = "POS RDA",
+            logger = log_msg
+          )
+          data_import$object_pos_raw <- object
+          global_data$object_pos_raw <- object # SYNC TO GLOBAL
           object_pos_raw <- data_import$object_pos_raw
           save(object_pos_raw, file = file.path(prj_init$mass_dataset_dir, "01.object_pos_raw.rda"))
           log_msg("POS RDA Loaded.", "success")
@@ -738,8 +758,14 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
       if(!is.null(input$neg_obj_mass)) {
         res <- validate_file(input$neg_obj_mass$datapath, "negative", "NEG File")
         if(res$success) {
-          data_import$object_neg_raw <- res$object
-          global_data$object_neg_raw <- res$object # SYNC TO GLOBAL
+          object <- metminer_harmonize_sample_info(
+            res$object,
+            project_sample_info = prj_init$sample_info,
+            mode = "NEG RDA",
+            logger = log_msg
+          )
+          data_import$object_neg_raw <- object
+          global_data$object_neg_raw <- object # SYNC TO GLOBAL
           object_neg_raw <- data_import$object_neg_raw
           save(object_neg_raw, file = file.path(prj_init$mass_dataset_dir, "01.object_neg_raw.rda"))
           log_msg("NEG RDA Loaded.", "success")
@@ -817,6 +843,12 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
       DT::datatable(head(var_info, 100), options = list(scrollX = TRUE))
     })
 
+    output$preview_sampleinfo <- DT::renderDataTable({
+      req(preview_obj())
+      sample_info <- massdataset::extract_sample_info(preview_obj())
+      DT::datatable(sample_info, options = list(scrollX = TRUE, pageLength = 10))
+    })
+
     # For TBL mode inputs (using suffixes to avoid ID collision if both panels exist)
     output$preview_expmat_tbl <- DT::renderDataTable({
       req(preview_obj())
@@ -828,6 +860,12 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
       req(preview_obj())
       var_info <- massdataset::extract_variable_info(preview_obj())
       DT::datatable(head(var_info, 100), options = list(scrollX = TRUE))
+    })
+
+    output$preview_sampleinfo_tbl <- DT::renderDataTable({
+      req(preview_obj())
+      sample_info <- massdataset::extract_sample_info(preview_obj())
+      DT::datatable(sample_info, options = list(scrollX = TRUE, pageLength = 10))
     })
 
     return(data_import)

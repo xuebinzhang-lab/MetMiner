@@ -4,6 +4,17 @@
 #' @noRd
 mod_annotation_ui <- function(id) {
   ns <- NS(id)
+  plantcyc_choices <- metminer_builtin_plantcyc_annotation_databases()
+  zma_idx <- grep("Zea mays", names(plantcyc_choices))
+  default_plantcyc <- if (length(zma_idx) > 0) {
+    plantcyc_choices[zma_idx[1]]
+  } else if (length(plantcyc_choices) > 0) {
+    plantcyc_choices[1]
+  } else {
+    character()
+  }
+  public_choices <- metminer_public_annotation_databases()
+  plantcyc_choice_html <- metminer_annotation_database_label_html(names(plantcyc_choices))
 
   tagList(
     shinyjs::useShinyjs(),
@@ -18,18 +29,31 @@ mod_annotation_ui <- function(id) {
           bg = "#f8f9fa",
 
           tags$h6(class = "fw-bold text-primary", "1. Databases"),
+          shinyWidgets::pickerInput(
+            inputId = ns("plantcyc_database"),
+            label = "Species-specific PlantCyc database:",
+            choices = stats::setNames(unname(plantcyc_choices), names(plantcyc_choices)),
+            selected = unname(default_plantcyc),
+            multiple = FALSE,
+            choicesOpt = list(content = plantcyc_choice_html),
+            options = shinyWidgets::pickerOptions(
+              `live-search` = TRUE,
+              size = 8,
+              title = "Choose one plant species"
+            )
+          ),
           shinyWidgets::prettyCheckboxGroup(
-            inputId = ns("builtin_databases"),
-            label = "Built-in massdbbuildin:",
-            choices = metminer_builtin_annotation_databases(),
-            selected = metminer_builtin_annotation_databases()[1],
+            inputId = ns("public_databases"),
+            label = "Optional public MS/MS databases:",
+            choices = public_choices,
+            selected = character(),
             icon = icon("check"),
-            status = "primary"
+            status = "success"
           ),
           textInput(ns("local_database_dir"), "Local database folder (.rda):", value = "",
                     placeholder = "/path/to/tidymass/database_folder"),
           tags$small(class = "text-muted d-block mb-2",
-                     "Folder may contain custom metid databaseClass .rda files."),
+                     "The selected PlantCyc species automatically loads paired MS1 and MS2 databases when available. Local folder may contain custom metid databaseClass .rda files."),
 
           tags$hr(),
           tags$h6(class = "fw-bold text-success", "2. Matching"),
@@ -165,7 +189,7 @@ mod_annotation_server <- function(id, global_data, prj_init) {
 
       tryCatch({
         databases <- metminer_collect_annotation_databases(
-          builtin_ids = input$builtin_databases,
+          builtin_ids = c(input$plantcyc_database %||% character(), input$public_databases %||% character()),
           local_dir = input$local_database_dir
         )
         database_labels <- vapply(databases, `[[`, character(1), "label")
@@ -195,11 +219,16 @@ mod_annotation_server <- function(id, global_data, prj_init) {
     # ---- Outputs ----
 
     output$method_summary <- renderText({
-      selected_db <- input$builtin_databases %||% character()
+      selected_plantcyc <- input$plantcyc_database %||% character()
+      selected_public <- input$public_databases %||% character()
+      selected_plantcyc_labels <- metminer_annotation_database_labels(selected_plantcyc)
+      selected_public_labels <- metminer_annotation_database_labels(selected_public)
       local_dir <- input$local_database_dir %||% ""
       local_text <- if (has_text(local_dir)) as.character(local_dir)[1] else "None"
       paste0(
-        "Built-in databases: ", if (length(selected_db) > 0) paste(selected_db, collapse = ", ") else "None", "\n",
+        "Species-specific PlantCyc database: ", if (length(selected_plantcyc_labels) > 0) paste(selected_plantcyc_labels, collapse = ", ") else "None", "\n",
+        "PlantCyc MS2: automatically loaded when available\n",
+        "Optional public MS/MS databases: ", if (length(selected_public_labels) > 0) paste(selected_public_labels, collapse = ", ") else "None", "\n",
         "Local database folder: ", local_text, "\n",
         "Column: ", toupper(input$column), "\n",
         "MS1 ppm: ", input$ms1_ppm,

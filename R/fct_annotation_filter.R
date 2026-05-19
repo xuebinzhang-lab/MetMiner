@@ -7,7 +7,8 @@ metminer_filter_redundant_annotations <- function(positive_object = NULL,
                                                    negative_object = NULL,
                                                    rt_tolerance = 10,
                                                    min_high_conf_level = 2,
-                                                   use_network_validation = TRUE) {
+                                                   use_network_validation = TRUE,
+                                                   drop_suspected_recurrent_background = FALSE) {
   pos <- metminer_build_annotation_filter_mode_table(
     positive_object,
     mode = "positive",
@@ -28,6 +29,10 @@ metminer_filter_redundant_annotations <- function(positive_object = NULL,
 
   candidates <- metminer_dedup_same_compound_features(candidates)
   candidates <- metminer_mark_cross_polarity_duplicates(candidates, rt_tolerance = rt_tolerance)
+  candidates <- metminer_apply_recurrent_background_filter(
+    candidates,
+    drop = isTRUE(drop_suspected_recurrent_background)
+  )
   final_table <- candidates[candidates$keep, , drop = FALSE]
   final_table <- final_table[order(final_table$rt, final_table$metabolite_id), , drop = FALSE]
 
@@ -258,6 +263,8 @@ metminer_ensure_filter_context_columns <- function(candidates) {
     recurrent_instance_count = NA_integer_,
     recurrent_parent_resolved_n = NA_integer_,
     recurrent_status = "none",
+    signal_quality_flag = "not_checked",
+    signal_quality_reason = NA_character_,
     suspected_interference = FALSE,
     interference_reason = NA_character_
   )
@@ -346,8 +353,85 @@ metminer_add_recurrent_annotation_context <- function(candidates, object) {
       candidates$suspected_interference[i] <- TRUE
       candidates$interference_reason[i] <- "same m/z appears at multiple RTs; parent source is unresolved"
     }
+
+    signal_flag <- metminer_classify_recurrent_signal_quality(
+      mz = candidates$mz[i],
+      recurrent_status = candidates$recurrent_status[i],
+      instance_count = candidates$recurrent_instance_count[i],
+      parent_resolved_n = candidates$recurrent_parent_resolved_n[i]
+    )
+    candidates$signal_quality_flag[i] <- signal_flag$flag
+    candidates$signal_quality_reason[i] <- signal_flag$reason
+    if (signal_flag$suspect) {
+      candidates$suspected_interference[i] <- TRUE
+      candidates$interference_reason[i] <- paste(
+        unique(c(candidates$interference_reason[i], signal_flag$reason)[has_text(c(candidates$interference_reason[i], signal_flag$reason))]),
+        collapse = "; "
+      )
+    }
   }
 
+  candidates
+}
+
+metminer_classify_recurrent_signal_quality <- function(mz,
+                                                        recurrent_status,
+                                                        instance_count,
+                                                        parent_resolved_n,
+                                                        low_mz_cutoff = 120,
+                                                        recurrent_instance_cutoff = 4) {
+  mz <- suppressWarnings(as.numeric(mz))
+  instance_count <- suppressWarnings(as.integer(instance_count))
+  parent_resolved_n <- suppressWarnings(as.integer(parent_resolved_n))
+  recurrent_status <- as.character(recurrent_status %||% "none")
+
+  if (!identical(recurrent_status, "unresolved_recurrent_ion")) {
+    return(list(flag = "not_flagged", reason = NA_character_, suspect = FALSE))
+  }
+
+  low_mz <- is.finite(mz) && mz < low_mz_cutoff
+  repeated <- is.finite(instance_count) && instance_count >= recurrent_instance_cutoff
+  unresolved <- is.na(parent_resolved_n) || parent_resolved_n == 0L
+
+  if (low_mz && repeated && unresolved) {
+    return(list(
+      flag = "recurrent_low_mz_background_candidate",
+      reason = sprintf(
+        "unresolved recurrent ion at low m/z (%.4f) with %d RT instances and no resolved parent",
+        mz, instance_count
+      ),
+      suspect = TRUE
+    ))
+  }
+  if (repeated && unresolved) {
+    return(list(
+      flag = "unresolved_recurrent_background_candidate",
+      reason = sprintf(
+        "unresolved recurrent ion with %d RT instances and no resolved parent",
+        instance_count
+      ),
+      suspect = TRUE
+    ))
+  }
+
+  list(flag = "unresolved_recurrent_review", reason = "unresolved recurrent ion; keep for manual chromatogram review", suspect = TRUE)
+}
+
+metminer_apply_recurrent_background_filter <- function(candidates, drop = FALSE) {
+  candidates <- metminer_ensure_filter_context_columns(candidates)
+  if (!isTRUE(drop) || nrow(candidates) == 0) {
+    return(candidates)
+  }
+  drop_flags <- c("recurrent_low_mz_background_candidate", "unresolved_recurrent_background_candidate")
+  idx <- candidates$keep &
+    candidates$signal_quality_flag %in% drop_flags &
+    candidates$record_type != "sub_network"
+  if (!any(idx, na.rm = TRUE)) {
+    return(candidates)
+  }
+  candidates$keep[idx] <- FALSE
+  candidates$drop_reason[idx] <- "suspected_recurrent_background_ion"
+  candidates$redundancy_reason[idx] <- paste(candidates$redundancy_reason[idx], "signal_quality_filter", sep = ";")
   candidates
 }
 

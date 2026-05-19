@@ -10,6 +10,7 @@
 - **Added conservative KEGG organism database helpers** that infer organism metabolite backgrounds from gene/KO/EC-supported reactions rather than full reference pathway compound lists.
 - **Added a KEGG organism database Shiny toolkit** with a cached green-plant organism selector populated from KEGG organism entries.
 - **Extended KEGG database construction to build MS2 databases from massdbbuildin**, using KEGG compound IDs as the primary join key and exporting bare KEGG IDs without `cpd:` or `path:` prefixes.
+- **Added KEGG pathway review QC and an exportable AI prompt** for weakly supported pathways, allowing external LLM curation without integrating AI into the KEGG toolkit.
 
 *Co-authored with Codex (OpenAI GPT-5) and Shawn*
 

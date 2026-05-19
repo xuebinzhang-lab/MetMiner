@@ -39,6 +39,7 @@ Imports:
     massdataset,
     massprocesser,
     massqc,
+    massstat,
     metid,
     methods,
     MSnbase,
@@ -64,6 +65,7 @@ Remotes:
     tidymass/metid,
     tidymass/massprocesser,
     tidymass/massqc,
+    tidymass/massstat,
     tidymass/metpath
 Encoding: UTF-8
 LazyData: true

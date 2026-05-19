@@ -87,19 +87,31 @@ app_ui <- function(request) {
         bslib::nav_panel("AI Annotation Reviewer", mod_ai_annotation_ui("ai_annotation_1")),
         bslib::nav_panel("Merge Data", div(class="p-4", "Placeholder")),
         bslib::nav_panel("Classification", div(class="p-4", "Placeholder")),
-        bslib::nav_panel("Differential Analysis", div(class="p-4", "Placeholder")),
-        bslib::nav_panel("Enrichment", div(class="p-4", "Placeholder"))
+        bslib::nav_panel("Differential Analysis", mod_differential_analysis_ui("differential_analysis_1")),
+        bslib::nav_panel("Enrichment", mod_data_enrich_ui("data_enrich_1"))
       ),
 
       bslib::nav_menu(
         title = "Toolkits",
         bslib::nav_panel(
+          "LC-MS Parameter Advisor",
+          mod_parameter_advisor_ui("parameter_advisor_1")
+        ),
+        bslib::nav_panel(
           "PlantCyc Metabolite Database",
           mod_plantcyc_database_ui("plantcyc_database_1")
         ),
         bslib::nav_panel(
+          "PlantCyc Local PGDB",
+          mod_plantcyc_pgdb_builder_ui("plantcyc_pgdb_builder_1")
+        ),
+        bslib::nav_panel(
           "KEGG Organism Database",
           mod_kegg_database_ui("kegg_database_1")
+        ),
+        bslib::nav_panel(
+          "Compound ID Mapping",
+          mod_id_mapping_ui("id_mapping_1")
         )
       ),
 

@@ -384,8 +384,10 @@ Please cite the following papers if you use MetMiner in your research:
 > *J. Integr. Plant Biol.* 66, 2329–2345.
 > [doi:10.1111/jipb.13774](https://doi.org/10.1111/jipb.13774)
 
-> **TidyMass2**: Wang, X., Liu, Y., Jiang, C., Huang, Z., Yan, H., Wong, S., Johnson, C.H., Zhang, J., Ge, Y., Zhang, F., Lai, R., Gao, P., Zhang, X., Shen, X., 2025.
-> *Nat. Commun.* [doi:10.1101/2025.05.09.652992](https://doi.org/10.1101/2025.05.09.652992)
+> **TidyMass2**: Wang, X., Liu, Y., Jiang, C., Huang, Z., Yan, H., Wong, S.H., Johnson, C.H., Zhang, J., Ge, Y., Zhang, F., Zhang, J., Lai, R., Gao, P., Zhang, X., Shen, X., 2026.
+> TidyMass2: advancing LC-MS untargeted metabolomics through metabolite origin inference and metabolic feature-based functional module analysis.
+> *Nat. Commun.* 17, 1755.
+> [doi:10.1038/s41467-026-68464-7](https://doi.org/10.1038/s41467-026-68464-7)
 
 > **TidyMass**: Shen, X., Yan, H., Wang, C., Gao, P., Johnson, C.H., Snyder, M.P., 2022.
 > *Nat. Commun.* 13, 4365.

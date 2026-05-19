@@ -847,6 +847,30 @@ metminer_plantcyc_database_info <- function(version = as.character(Sys.Date())) 
   )
 }
 
+#' Sanitize user-defined PlantCyc output prefix
+#'
+#' @noRd
+metminer_plantcyc_sanitize_prefix <- function(prefix = "plantcyc_custom") {
+  prefix <- trimws(as.character(prefix %||% ""))
+  if (!nzchar(prefix)) prefix <- "plantcyc_custom"
+  prefix <- gsub("[^A-Za-z0-9_]+", "_", prefix)
+  prefix <- gsub("_+", "_", prefix)
+  prefix <- gsub("^_|_$", "", prefix)
+  if (!nzchar(prefix)) prefix <- "plantcyc_custom"
+  if (!grepl("^[A-Za-z]", prefix)) prefix <- paste0("plantcyc_", prefix)
+  prefix
+}
+
+#' Save an R object with a user-defined object name inside an RDA file
+#'
+#' @noRd
+metminer_save_named_rda <- function(object, object_name, file) {
+  env <- new.env(parent = emptyenv())
+  assign(object_name, object, envir = env)
+  save(list = object_name, file = file, envir = env)
+  invisible(file)
+}
+
 #' Construct a PlantCyc MS1-only metid databaseClass object
 #'
 #' @noRd
@@ -884,6 +908,10 @@ metminer_plantcyc_build_match_index <- function(clean_compounds) {
   for (i in seq_len(nrow(clean_compounds))) {
     names_i <- unique(c(clean_compounds$compound_name[i], synonyms[[i]]))
     names_i <- names_i[has_text(names_i)]
+    if (length(names_i) == 0) {
+      name_rows[[i]] <- data.frame(plantcyc_id = character(), name_key = character(), stringsAsFactors = FALSE)
+      next
+    }
     name_rows[[i]] <- data.frame(
       plantcyc_id = clean_compounds$compound_id[i],
       name_key = metminer_plantcyc_normalize_name(names_i),
@@ -1127,6 +1155,7 @@ metminer_build_plantcyc_ms2_database <- function(clean_compounds,
 metminer_build_plantcyc_databases <- function(compound_file,
                                               pathway_file,
                                               output_dir,
+                                              output_prefix = "plantcyc_custom",
                                               version = as.character(Sys.Date()),
                                               min_mw = 70,
                                               max_mw = 1500,
@@ -1137,6 +1166,7 @@ metminer_build_plantcyc_databases <- function(compound_file,
                                               classyfire_sleep_sec = 2,
                                               classyfire_max_retries = 3,
                                               classyfire_local_cache_file = metminer_plantcyc_classyfire_cache_file()) {
+  output_prefix <- metminer_plantcyc_sanitize_prefix(output_prefix)
   clean_result <- metminer_clean_plantcyc_smarttables(
     compound_file = compound_file,
     pathway_file = pathway_file,
@@ -1189,33 +1219,35 @@ metminer_build_plantcyc_databases <- function(compound_file,
   pathway_db <- pathway_result$database
 
   if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
-  plantcyc_ftataricum_ms1 <- ms1_db
-  plantcyc_ftataricum_ms2 <- ms2_db
-  plantcyc_ftataricum_pathway <- pathway_db
-  save(plantcyc_ftataricum_ms1, file = file.path(output_dir, "plantcyc_ftataricum_ms1.rda"))
-  save(plantcyc_ftataricum_ms2, file = file.path(output_dir, "plantcyc_ftataricum_ms2.rda"))
-  save(plantcyc_ftataricum_pathway, file = file.path(output_dir, "plantcyc_ftataricum_pathway.rda"))
+  rda_files <- list(
+    ms1 = paste0(output_prefix, "_ms1.rda"),
+    ms2 = paste0(output_prefix, "_ms2.rda"),
+    pathway = paste0(output_prefix, "_pathway.rda")
+  )
+  metminer_save_named_rda(ms1_db, paste0(output_prefix, "_ms1"), file.path(output_dir, rda_files$ms1))
+  metminer_save_named_rda(ms2_db, paste0(output_prefix, "_ms2"), file.path(output_dir, rda_files$ms2))
+  metminer_save_named_rda(pathway_db, paste0(output_prefix, "_pathway"), file.path(output_dir, rda_files$pathway))
 
-  utils::write.table(ms1_db@spectra.info, file.path(output_dir, "plantcyc_ms1_spectra_info.tsv"),
+  utils::write.table(ms1_db@spectra.info, file.path(output_dir, paste0(output_prefix, "_ms1_spectra_info.tsv")),
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-  utils::write.table(clean_result$ms2_eligible_compounds, file.path(output_dir, "plantcyc_ms2_eligible_compounds.tsv"),
+  utils::write.table(clean_result$ms2_eligible_compounds, file.path(output_dir, paste0(output_prefix, "_ms2_eligible_compounds.tsv")),
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-  utils::write.table(metminer_plantcyc_coa_fragment_rules(), file.path(output_dir, "plantcyc_coa_fragment_rules.tsv"),
+  utils::write.table(metminer_plantcyc_coa_fragment_rules(), file.path(output_dir, paste0(output_prefix, "_coa_fragment_rules.tsv")),
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-  utils::write.table(ms2_db@spectra.info, file.path(output_dir, "plantcyc_ms2_spectra_info.tsv"),
+  utils::write.table(ms2_db@spectra.info, file.path(output_dir, paste0(output_prefix, "_ms2_spectra_info.tsv")),
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-  utils::write.table(ms2_result$match_log, file.path(output_dir, "plantcyc_ms2_match_log.tsv"),
+  utils::write.table(ms2_result$match_log, file.path(output_dir, paste0(output_prefix, "_ms2_match_log.tsv")),
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-  utils::write.table(ms2_result$unmatched_compounds, file.path(output_dir, "plantcyc_ms2_unmatched_compounds.tsv"),
+  utils::write.table(ms2_result$unmatched_compounds, file.path(output_dir, paste0(output_prefix, "_ms2_unmatched_compounds.tsv")),
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-  utils::write.table(pathway_result$reaction_table, file.path(output_dir, "plantcyc_pathway_reaction_table.tsv"),
+  utils::write.table(pathway_result$reaction_table, file.path(output_dir, paste0(output_prefix, "_pathway_reaction_table.tsv")),
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
   if (!is.null(classyfire_result)) {
-    utils::write.table(classyfire_result$classification, file.path(output_dir, "plantcyc_classyfire_classification.tsv"),
+    utils::write.table(classyfire_result$classification, file.path(output_dir, paste0(output_prefix, "_classyfire_classification.tsv")),
                        sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-    utils::write.table(clean_result$clean_compounds, file.path(output_dir, "plantcyc_clean_compounds_with_classyfire.tsv"),
+    utils::write.table(clean_result$clean_compounds, file.path(output_dir, paste0(output_prefix, "_clean_compounds_with_classyfire.tsv")),
                        sep = "\t", quote = FALSE, row.names = FALSE, na = "")
-    file.copy(classyfire_result$local_cache_file, file.path(output_dir, "plantcyc_classyfire_local_cache_snapshot.tsv"), overwrite = TRUE)
+    file.copy(classyfire_result$local_cache_file, file.path(output_dir, paste0(output_prefix, "_classyfire_local_cache_snapshot.tsv")), overwrite = TRUE)
   }
 
   positive_spectra <- sum(vapply(ms2_db@spectra.data$Spectra.positive, length, integer(1)))
@@ -1256,7 +1288,7 @@ metminer_build_plantcyc_databases <- function(compound_file,
                stringsAsFactors = FALSE)
   } else data.frame(metric = character(), value = integer(), stringsAsFactors = FALSE)
   summary <- rbind(summary, source_summary, type_summary)
-  utils::write.table(summary, file.path(output_dir, "plantcyc_database_summary.tsv"),
+  utils::write.table(summary, file.path(output_dir, paste0(output_prefix, "_database_summary.tsv")),
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
 
   list(
@@ -1270,7 +1302,9 @@ metminer_build_plantcyc_databases <- function(compound_file,
     coa_fragment_rules = metminer_plantcyc_coa_fragment_rules(),
     classyfire_classification = if (!is.null(classyfire_result)) classyfire_result$classification else data.frame(),
     summary = summary,
-    output_dir = output_dir
+    output_dir = output_dir,
+    output_prefix = output_prefix,
+    rda_files = rda_files
   )
 }
 
