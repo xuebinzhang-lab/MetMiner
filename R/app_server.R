@@ -104,4 +104,6 @@ app_server <- function(input, output, session) {
   mod_kegg_database_server("kegg_database_1")
   # PlantCyc/KEGG compound ID mapping toolkit
   mod_id_mapping_server("id_mapping_1")
+  # Global expandable AI assistant
+  mod_global_ai_bot_server("global_ai_bot", global_data = global_data, prj_init = prj_init)
 }

@@ -130,7 +130,8 @@ app_ui <- function(request) {
           span("GitHub", style = "font-size: 0.95rem;")
         )
       )
-    )
+    ),
+    mod_global_ai_bot_ui("global_ai_bot")
   )
 }
 
