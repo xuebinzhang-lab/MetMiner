@@ -287,7 +287,8 @@ mod_kegg_database_server <- function(id, global_data = NULL) {
 
     observe({
       if (is.null(global_data)) return()
-      global_data$database_advisor_state <- modifyList(global_data$database_advisor_state %||% list(), list(
+      previous_state <- shiny::isolate(global_data$database_advisor_state %||% list())
+      global_data$database_advisor_state <- modifyList(previous_state, list(
         available = TRUE,
         kegg = list(
           organism_code = input$organism_code %||% NA_character_,

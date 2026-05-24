@@ -308,7 +308,8 @@ mod_plantcyc_database_server <- function(id, global_data = NULL) {
 
     observe({
       if (is.null(global_data)) return()
-      global_data$database_advisor_state <- modifyList(global_data$database_advisor_state %||% list(), list(
+      previous_state <- shiny::isolate(global_data$database_advisor_state %||% list())
+      global_data$database_advisor_state <- modifyList(previous_state, list(
         available = TRUE,
         plantcyc = list(
           compound_file_name = input$compound_file$name %||% NA_character_,

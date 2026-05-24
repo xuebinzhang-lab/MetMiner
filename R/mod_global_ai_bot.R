@@ -217,7 +217,33 @@ mod_global_ai_bot_ui <- function(id) {
       (function() {
         var panelId = '%s';
         var handleId = '%s';
+        var openButtonId = '%s';
+        var closeButtonId = '%s';
         var storageKey = 'metminer_global_ai_bot_height';
+        function openBotPanel() {
+          var panel = document.getElementById(panelId);
+          var openButton = document.getElementById(openButtonId);
+          if (panel) panel.classList.add('is-open');
+          if (openButton) openButton.style.display = 'none';
+        }
+        function closeBotPanel() {
+          var panel = document.getElementById(panelId);
+          var openButton = document.getElementById(openButtonId);
+          if (panel) panel.classList.remove('is-open');
+          if (openButton) openButton.style.display = 'inline-flex';
+        }
+        function initToggle() {
+          var openButton = document.getElementById(openButtonId);
+          var closeButton = document.getElementById(closeButtonId);
+          if (openButton && openButton.dataset.globalAiToggleBound !== '1') {
+            openButton.dataset.globalAiToggleBound = '1';
+            openButton.addEventListener('click', openBotPanel);
+          }
+          if (closeButton && closeButton.dataset.globalAiToggleBound !== '1') {
+            closeButton.dataset.globalAiToggleBound = '1';
+            closeButton.addEventListener('click', closeBotPanel);
+          }
+        }
         function initResize() {
           var panel = document.getElementById(panelId);
           var handle = document.getElementById(handleId);
@@ -248,14 +274,18 @@ mod_global_ai_bot_ui <- function(id) {
             document.addEventListener('mouseup', onUp);
           });
         }
-        if (document.readyState === 'loading') {
-          document.addEventListener('DOMContentLoaded', initResize);
-        } else {
+        function initGlobalAiBot() {
+          initToggle();
           initResize();
         }
-        document.addEventListener('shiny:connected', initResize);
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', initGlobalAiBot);
+        } else {
+          initGlobalAiBot();
+        }
+        document.addEventListener('shiny:connected', initGlobalAiBot);
       })();
-    ", ns("panel"), ns("resize_handle")))),
+    ", ns("panel"), ns("resize_handle"), ns("open_bot"), ns("close_bot")))),
     div(
       id = ns("global_ai_root"),
       actionButton(ns("open_bot"), label = NULL, icon = bsicons::bs_icon("robot", size = "1.45rem"),
@@ -393,13 +423,13 @@ mod_global_ai_bot_server <- function(id, global_data, prj_init) {
 
     open_panel <- function() {
       shinyjs::runjs(sprintf(
-        "document.getElementById('%s').classList.add('is-open'); document.getElementById('%s').style.display='none';",
+        "var panel=document.getElementById('%s'); var openButton=document.getElementById('%s'); if(panel){panel.classList.add('is-open');} if(openButton){openButton.style.display='none';}",
         session$ns("panel"), session$ns("open_bot")
       ))
     }
     close_panel <- function() {
       shinyjs::runjs(sprintf(
-        "document.getElementById('%s').classList.remove('is-open'); document.getElementById('%s').style.display='inline-flex';",
+        "var panel=document.getElementById('%s'); var openButton=document.getElementById('%s'); if(panel){panel.classList.remove('is-open');} if(openButton){openButton.style.display='inline-flex';}",
         session$ns("panel"), session$ns("open_bot")
       ))
     }
