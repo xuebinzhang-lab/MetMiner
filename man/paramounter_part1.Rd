@@ -16,15 +16,20 @@ paramounter_part1(
 \arguments{
 \item{directory}{The data path for mzXML files.}
 
-\item{massSDrange}{The range of standard deviations for mass differences, default 2.}
+\item{massSDrange}{Numeric scalar. Multiplier applied to the within-peak m/z
+standard deviation when estimating mass tolerance in ppm; default 2.}
 
-\item{smooth}{Chromatographic smoothness level (default 0).}
+\item{smooth}{Numeric smoothing window level for the internal EIC smoother;
+0 disables smoothing (default 0).}
 
-\item{cutoff}{The ppm percentage for cutoff (default 0.95).}
+\item{cutoff}{Quantile of peak-level ppm estimates used as the suggested
+ppm cutoff (default 0.95).}
 
 \item{thread}{Number of threads for parallel processing.}
 
-\item{filenum}{Number of files to use (3, 5, or "all").}
+\item{filenum}{Number of mzXML files to use (3, 5, or "all"). Numeric
+choices are sampled evenly across the file list rather than taking only
+the first files.}
 }
 \description{
 Optimize XCMS parameters (detect PPM cutoff) using a binned EIC approach.

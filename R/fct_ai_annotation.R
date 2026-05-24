@@ -182,7 +182,10 @@ metminer_ai_system_prompt <- function(language = "en", mode = c("review", "chat"
     "You are an LC-MS plant metabolomics annotation reviewer.",
     paste0("Write the final answer in ", language_label, ". All explanatory prose and section headings must use this language. Keep compound names, feature IDs, adducts, database IDs, DOIs, and literature references unchanged."),
     "You must judge metabolite annotation credibility from the provided evidence bundle, not from compound names alone.",
-    "Prioritize annotation level, metID adduct evidence, MS1 m/z/RT, MS2 fragments, feature-network role, recurrent-ion status, and non-redundancy audit fields.",
+    "Interpret annotations with the MetMiner layered strategy: Layer 1 is genome-informed KEGG/PlantCyc reaction candidates; Layer 2 is spectral evidence from public MS2 libraries and optional local/custom standard libraries.",
+    "For Layer 1 KEGG/PlantCyc candidates, require strict core-adduct support before treating the candidate as credible. Do not upgrade a Layer 1-only candidate beyond putative Level 3 without spectral or orthogonal evidence.",
+    "Layer 2 public MS2 matches can validate Layer 1 candidates or independently supplement metabolites absent from reaction databases. Optional local/custom standard libraries can support Level 1 only when RT, precursor, and MS2 evidence are present in the bundle.",
+    "Prioritize annotation level, MetMiner layered confidence level, metID adduct evidence, MS1 m/z/RT, MS2 fragments, feature-network role, recurrent-ion status, and non-redundancy audit fields.",
     "Treat metID adducts as database/adduct-dictionary annotation evidence, not as feature-network relationships.",
     "If literature_evidence is provided, use it only as contextual support for known biology, plant occurrence, metabolism, and analytical reports; do not let literature override weak spectral evidence.",
     "Never invent papers, authors, years, journals, or DOIs. You may cite only papers present in literature_evidence.papers.",
@@ -381,7 +384,9 @@ metminer_ai_compact_evidence_for_chat <- function(evidence) {
   if (!is.null(out$raw_annotation_candidates) && nrow(out$raw_annotation_candidates) > 0) {
     raw <- out$raw_annotation_candidates
     slim_cols <- intersect(
-      c("variable_id", "Compound.name", "Adduct", "Level", "Total.score", "mode"),
+      c("variable_id", "Compound.name", "Adduct", "Level", "Total.score", "Database",
+        "annotation_layer", "evidence_scope", "core_adduct_match",
+        "strict_genome_adduct_pass", "metminer_confidence_level", "mode"),
       colnames(raw)
     )
     out$raw_annotation_candidates <- raw[, slim_cols, drop = FALSE]
@@ -696,8 +701,11 @@ metminer_ai_annotation_rows <- function(compound_name, object, mode) {
   }
   ann <- ann[mask, , drop = FALSE]
   if (nrow(ann) == 0) return(data.frame())
+  ann <- metminer_add_annotation_layer_columns(ann, mode, metminer_default_adduct_advice())
   keep_cols <- intersect(c("variable_id", "Compound.name", "Adduct", "Level", "Total.score",
-                           "SS", "RT.error", "CE", "Database", "HMDB.ID", "KEGG.ID", "CAS.ID", "Lab.ID"),
+                           "SS", "RT.error", "CE", "Database", "HMDB.ID", "KEGG.ID", "PlantCyc.ID",
+                           "CAS.ID", "Lab.ID", "annotation_layer", "evidence_scope",
+                           "core_adduct_match", "strict_genome_adduct_pass", "metminer_confidence_level"),
                          colnames(ann))
   out <- ann[, keep_cols, drop = FALSE]
   out$mode <- mode
@@ -794,10 +802,13 @@ metminer_ai_compact_table <- function(tbl, max_rows = 20) {
   keep_cols <- intersect(
     c("metabolite_id", "record_type", "mode", "representative_feature", "member_features",
       "compound_name", "annotation_level", "representative_adduct", "member_adducts",
-      "member_annotation_levels", "confidence_class", "mz", "rt", "mean_area", "n_features",
+      "member_annotation_levels", "annotation_layer", "evidence_scope", "core_adduct_match",
+      "strict_genome_adduct_pass", "metminer_confidence_level", "confidence_class",
+      "mz", "rt", "mean_area", "n_features",
       "compound_key", "keep", "drop_reason", "recurrent_status", "suspected_interference",
       "interference_reason", "network_roles", "parent_feature_ids",
-      "variable_id", "Compound.name", "Adduct", "Level", "Total.score", "HMDB.ID", "KEGG.ID", "CAS.ID", "Lab.ID"),
+      "variable_id", "Compound.name", "Adduct", "Level", "Total.score", "Database",
+      "HMDB.ID", "KEGG.ID", "PlantCyc.ID", "CAS.ID", "Lab.ID"),
     colnames(tbl)
   )
   utils::head(tbl[, keep_cols, drop = FALSE], max_rows)

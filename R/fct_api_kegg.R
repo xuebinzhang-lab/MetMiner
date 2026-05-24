@@ -1043,6 +1043,79 @@ metminer_kegg_save_curated_pathway_database <- function(result,
 #' Build a conservative KEGG organism metabolite database
 #'
 #' @noRd
+metminer_kegg_existing_database_files <- function(output_dir, organism_code) {
+  prefix <- paste0("kegg_", organism_code)
+  required <- file.path(output_dir, paste0(prefix, c("_ms1.rda", "_ms2.rda", "_pathway.rda")))
+  list(
+    exists = all(file.exists(required)),
+    required = required,
+    optional = file.path(output_dir, paste0(prefix, c(
+      "_clean_compounds.tsv",
+      "_removed_compounds.tsv",
+      "_pathway_reaction_map.tsv",
+      "_pathway_compound_map.tsv",
+      "_pathway_qc.tsv",
+      "_pathway_review_prompt.md",
+      "_ms2_match_log.tsv",
+      "_ms2_unmatched_compounds.tsv",
+      "_summary.tsv"
+    )))
+  )
+}
+
+metminer_kegg_load_database_object <- function(file) {
+  env <- new.env(parent = emptyenv())
+  object_names <- load(file, envir = env)
+  for (object_name in object_names) {
+    obj <- get(object_name, envir = env)
+    if (methods::is(obj, "databaseClass") || methods::is(obj, "pathway_database")) {
+      return(obj)
+    }
+  }
+  get(object_names[1], envir = env)
+}
+
+metminer_kegg_read_tsv_if_exists <- function(file) {
+  if (!file.exists(file)) return(data.frame())
+  utils::read.delim(file, stringsAsFactors = FALSE, check.names = FALSE)
+}
+
+metminer_load_kegg_organism_database_result <- function(output_dir,
+                                                        organism_code,
+                                                        organism_name = organism_code) {
+  files <- metminer_kegg_existing_database_files(output_dir, organism_code)
+  if (!isTRUE(files$exists)) {
+    stop("No complete KEGG database was found in: ", output_dir, call. = FALSE)
+  }
+  prefix <- paste0("kegg_", organism_code)
+  path <- function(suffix) file.path(output_dir, paste0(prefix, suffix))
+  ms1_db <- metminer_kegg_load_database_object(path("_ms1.rda"))
+  ms2_db <- metminer_kegg_load_database_object(path("_ms2.rda"))
+  pathway_db <- metminer_kegg_load_database_object(path("_pathway.rda"))
+  prompt_file <- path("_pathway_review_prompt.md")
+  pathway_review_prompt <- if (file.exists(prompt_file)) paste(readLines(prompt_file, warn = FALSE), collapse = "\n") else ""
+  summary <- metminer_kegg_read_tsv_if_exists(path("_summary.tsv"))
+  pathway_qc <- metminer_kegg_read_tsv_if_exists(path("_pathway_qc.tsv"))
+  list(
+    organism_code = organism_code,
+    organism_name = organism_name,
+    ms1_database = ms1_db,
+    ms2_database = ms2_db,
+    pathway_database = pathway_db,
+    clean_compounds = metminer_kegg_read_tsv_if_exists(path("_clean_compounds.tsv")),
+    removed_compounds = metminer_kegg_read_tsv_if_exists(path("_removed_compounds.tsv")),
+    pathway_reaction_map = metminer_kegg_read_tsv_if_exists(path("_pathway_reaction_map.tsv")),
+    pathway_compound_map = metminer_kegg_read_tsv_if_exists(path("_pathway_compound_map.tsv")),
+    pathway_qc = pathway_qc,
+    pathway_review_prompt = pathway_review_prompt,
+    ms2_match_log = metminer_kegg_read_tsv_if_exists(path("_ms2_match_log.tsv")),
+    ms2_unmatched_compounds = metminer_kegg_read_tsv_if_exists(path("_ms2_unmatched_compounds.tsv")),
+    summary = summary,
+    output_dir = output_dir,
+    loaded_from_existing = TRUE
+  )
+}
+
 metminer_build_kegg_organism_database <- function(organism_code = "zma",
                                                   organism_name = "Zea mays",
                                                   output_dir = file.path("Temp", paste0("kegg_", organism_code, "_database")),
@@ -1216,6 +1289,8 @@ metminer_build_kegg_organism_database <- function(organism_code = "zma",
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
 
   list(
+    organism_code = organism_code,
+    organism_name = organism_name,
     ms1_database = ms1_db,
     ms2_database = ms2_db,
     pathway_database = pathway_db,

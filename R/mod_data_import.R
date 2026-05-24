@@ -57,7 +57,8 @@ mod_data_import_ui <- function(id) {
                   open = FALSE,
                   bslib::accordion_panel(
                     title = "Basic Parameters", icon = bsicons::bs_icon("sliders"),
-                    textInput(ns('ppm'), 'ppm', value = 15),
+                    textInput(ns('ppm_pos'), 'ppm POS', value = 15),
+                    textInput(ns('ppm_neg'), 'ppm NEG', value = 15),
                     textInput(ns('snthresh'), 'snthresh', value = 10),
                     textInput(ns('noise'), 'noise', value = 500),
                     selectInput(ns('threads'), 'threads', choices = c(1, 2, 4), selected = 1)
@@ -74,8 +75,7 @@ mod_data_import_ui <- function(id) {
                     textInput(ns('binSize'), 'binSize', value = 0.025),
                     textInput(ns('bw'), 'bw', value = 5),
                     textInput(ns('min_fraction'), 'min_fraction', value = 0.5),
-                    selectInput(ns('fill_peaks'), 'fill_peaks', choices = c("TRUE", "FALSE"), selected = "FALSE"),
-                    selectInput(ns('column'), 'column', choices = c("rp", "hilic"), selected = "rp")
+                    selectInput(ns('fill_peaks'), 'fill_peaks', choices = c("TRUE", "FALSE"), selected = "FALSE")
                   )
                 ),
                 br()
@@ -140,11 +140,10 @@ mod_data_import_ui <- function(id) {
                         bslib::accordion_panel(
                           title = "Step 2 Params",
                           icon = bsicons::bs_icon("2-circle"),
-                          textInput(inputId = ns("opt_sd_2"), label = "massSDrange", value = 2),
                           textInput(inputId = ns("opt_smooth_2"), label = "smooth", value = 0),
-                          textInput(inputId = ns("opt_cutoff_2"), label = "cutoff", value = 0.95),
                           selectInput(inputId = ns("opt_thread_2"), label = "thread", choices = c(1, 2, 4), selected = 1),
-                          textInput(inputId = ns("opt_ppm_2"), label = "ppmCut", value = 7, placeholder = "Auto from Step 1"),
+                          textInput(inputId = ns("opt_ppm_pos_2"), label = "POS ppmCut", value = 7, placeholder = "Auto from Step 1"),
+                          textInput(inputId = ns("opt_ppm_neg_2"), label = "NEG ppmCut", value = 7, placeholder = "Auto from Step 1"),
                           radioButtons(inputId = ns("opt_filenum_2"), label = "filenum", choices = c(3, 5, "all"), selected = 3)
                         )
                       ),
@@ -296,13 +295,87 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
       combined_plot = NULL,
       final_params = NULL,
       opt_table = NULL,
-      ppm_cut = NULL,
+      ppm_cut_pos = NULL,
+      ppm_cut_neg = NULL,
       opt_step1_done = FALSE,
       opt_step2_done = FALSE
     )
 
     shinyjs::hide("opt_ui_wrapper")
     shinyjs::hide("execution_ui_wrapper")
+
+    current_raw_params <- function() {
+      list(
+        ppm_pos = input$ppm_pos %||% "15",
+        ppm_neg = input$ppm_neg %||% "15",
+        snthresh = input$snthresh %||% "10",
+        noise = input$noise %||% "500",
+        threads = input$threads %||% "1",
+        peakwidth_min = input$p_min %||% "5",
+        peakwidth_max = input$p_max %||% "30",
+        prefilter_peaks = input$pre_left %||% "3",
+        prefilter_intensity = input$pre_right %||% "500",
+        fitgauss = input$fitgauss %||% "FALSE",
+        integrate = input$integrate %||% "2",
+        mzdiff = input$mzdiff %||% "0.01",
+        binSize = input$binSize %||% "0.025",
+        bw = input$bw %||% "5",
+        min_fraction = input$min_fraction %||% "0.5",
+        fill_peaks = input$fill_peaks %||% "FALSE"
+      )
+    }
+
+    summarize_import_object <- function(obj) {
+      if (is.null(obj)) return(list(available = FALSE))
+      variable_info <- tryCatch(massdataset::extract_variable_info(obj), error = function(e) data.frame())
+      sample_info <- tryCatch(massdataset::extract_sample_info(obj), error = function(e) data.frame())
+      expression_data <- tryCatch(massdataset::extract_expression_data(obj), error = function(e) NULL)
+      list(
+        available = TRUE,
+        variables = nrow(variable_info),
+        samples = nrow(sample_info),
+        sample_id_preview = utils::head(as.character(sample_info$sample_id %||% rownames(sample_info)), 12),
+        variable_columns = utils::head(colnames(variable_info), 20),
+        sample_columns = utils::head(colnames(sample_info), 20),
+        expression_na_rate = if (!is.null(expression_data)) signif(mean(is.na(as.matrix(expression_data))), 4) else NA_real_,
+        expression_zero_rate = if (!is.null(expression_data)) signif(mean(as.matrix(expression_data) == 0, na.rm = TRUE), 4) else NA_real_
+      )
+    }
+
+    observe({
+      global_data$data_import_advisor_state <- list(
+        available = TRUE,
+        data_source = input$data_source %||% "raw",
+        raw_ms1_dir = state$raw_ms1_dir,
+        raw_zip_name = input$ms1_zip$name %||% NA_character_,
+        table_file_name = input$expmat_tbl$name %||% NA_character_,
+        mass_dataset_files = list(
+          positive = input$pos_obj_mass$name %||% NA_character_,
+          negative = input$neg_obj_mass$name %||% NA_character_
+        ),
+        table_mapping = list(
+          variable_id = input$exp_vari_id %||% NA_character_,
+          mz = input$exp_mz %||% NA_character_,
+          rt = input$exp_rt %||% NA_character_,
+          polarity = input$exp_ion %||% NA_character_,
+          rt_unit = input$rt_unit %||% NA_character_
+        ),
+        raw_params = current_raw_params(),
+        optimization = list(
+          step1_done = isTRUE(state$opt_step1_done),
+          step2_done = isTRUE(state$opt_step2_done),
+          ppm_cut_pos = state$ppm_cut_pos,
+          ppm_cut_neg = state$ppm_cut_neg,
+          opt_table_preview = utils::head(as.data.frame(state$opt_table %||% data.frame()), 20)
+        ),
+        final_params = as.data.frame(state$final_params %||% data.frame()),
+        imported_objects = list(
+          positive = summarize_import_object(data_import$object_pos_raw),
+          negative = summarize_import_object(data_import$object_neg_raw)
+        ),
+        updated_at = as.character(Sys.time())
+      )
+    })
 
     progress_handlers <- create_progress_handlers(ns)
     show_progress_modal   <- progress_handlers$show_progress_modal
@@ -418,7 +491,8 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
       tryCatch({
         state$opt_results <- list(pos = NULL, neg = NULL)
         state$opt_table <- NULL
-        state$ppm_cut <- NULL
+        state$ppm_cut_pos <- NULL
+        state$ppm_cut_neg <- NULL
         state$opt_step1_done <- FALSE
         state$opt_step2_done <- FALSE
 
@@ -437,12 +511,13 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
           POS = get_ppm_cut(state$opt_results$pos),
           NEG = get_ppm_cut(state$opt_results$neg)
         )
-        ppm_candidates <- ppm_candidates[is.finite(ppm_candidates)]
-
-        if(length(ppm_candidates) > 0) {
-          final_ppm <- max(ppm_candidates, na.rm = TRUE)
-          state$ppm_cut <- final_ppm
-          updateTextInput(session, "opt_ppm_2", value = round(final_ppm, 2))
+        if(is.finite(ppm_candidates[["POS"]])) {
+          state$ppm_cut_pos <- ppm_candidates[["POS"]]
+          updateTextInput(session, "opt_ppm_pos_2", value = round(state$ppm_cut_pos, 2))
+        }
+        if(is.finite(ppm_candidates[["NEG"]])) {
+          state$ppm_cut_neg <- ppm_candidates[["NEG"]]
+          updateTextInput(session, "opt_ppm_neg_2", value = round(state$ppm_cut_neg, 2))
         }
 
         state$opt_step1_done <- TRUE
@@ -450,8 +525,13 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
         Sys.sleep(0.5)
         close_progress_modal()
 
-        msg <- if(length(ppm_candidates) > 0) {
-          paste0("Step 1 finished. Suggested ppmCut = ", round(state$ppm_cut, 2), ". Review the PPM plot, adjust ppmCut if needed, then run Step 2.")
+        valid_ppm <- ppm_candidates[is.finite(ppm_candidates)]
+        msg <- if(length(valid_ppm) > 0) {
+          paste0(
+            "Step 1 finished. Suggested ppmCut: ",
+            paste(names(valid_ppm), round(valid_ppm, 2), sep = "=", collapse = "; "),
+            ". Review the PPM plots, adjust polarity-specific ppmCut if needed, then run Step 2."
+          )
         } else {
           "Step 1 finished, but no valid ppmCut was returned. Please inspect the plot/log and enter ppmCut manually before Step 2."
         }
@@ -470,18 +550,26 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
 
       log_msg("Starting Parameter Optimization Step 2: final parameter search...", "info")
 
-      p2_sd <- as.numeric(input$opt_sd_2)
       p2_sm <- as.numeric(input$opt_smooth_2)
-      p2_cutoff <- as.numeric(input$opt_cutoff_2)
       p2_th <- as.numeric(input$opt_thread_2)
       p2_fn <- input$opt_filenum_2
-      ppm_use <- suppressWarnings(as.numeric(input$opt_ppm_2))
+      ppm_for_mode <- function(mode) {
+        id <- if (identical(mode, "pos")) "opt_ppm_pos_2" else "opt_ppm_neg_2"
+        ppm <- suppressWarnings(as.numeric(input[[id]]))
+        if(length(ppm) == 0 || !is.finite(ppm[1])) return(NA_real_)
+        ppm[1]
+      }
+      ppm_pos <- ppm_for_mode("pos")
+      ppm_neg <- ppm_for_mode("neg")
 
-      if(length(ppm_use) == 0 || !is.finite(ppm_use[1])) {
-        shinyalert::shinyalert("Missing ppmCut", "Run Step 1 first, or enter a valid ppmCut manually before Step 2.", type = "warning")
+      if(struct$pos && !is.finite(ppm_pos)) {
+        shinyalert::shinyalert("Missing POS ppmCut", "Run Step 1 first, or enter a valid POS ppmCut manually before Step 2.", type = "warning")
         return(NULL)
       }
-      ppm_use <- ppm_use[1]
+      if(struct$neg && !is.finite(ppm_neg)) {
+        shinyalert::shinyalert("Missing NEG ppmCut", "Run Step 1 first, or enter a valid NEG ppmCut manually before Step 2.", type = "warning")
+        return(NULL)
+      }
 
       show_progress_modal("Optimization Step 2", "Optimizing peak-picking parameters...", 0)
 
@@ -492,13 +580,13 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
         if(struct$pos) {
           update_progress_modal(35, "Optimizing POS parameters...")
           dir_pos <- get_polarity_dir(state$raw_ms1_dir, "POS")
-          tbl_pos <- paramounter_part2(directory = dir_pos, massSDrange = p2_sd, smooth = p2_sm, cutoff = p2_cutoff, ppmCut = ppm_use, filenum = p2_fn, thread = p2_th)
+          tbl_pos <- paramounter_part2(directory = dir_pos, smooth = p2_sm, ppmCut = ppm_pos, filenum = p2_fn, thread = p2_th)
           if(!is.null(tbl_pos)) tbl_pos <- tbl_pos %>% dplyr::rename(Positive = Value)
         }
         if(struct$neg) {
           update_progress_modal(70, "Optimizing NEG parameters...")
           dir_neg <- get_polarity_dir(state$raw_ms1_dir, "NEG")
-          tbl_neg <- paramounter_part2(directory = dir_neg, massSDrange = p2_sd, smooth = p2_sm, cutoff = p2_cutoff, ppmCut = ppm_use, filenum = p2_fn, thread = p2_th)
+          tbl_neg <- paramounter_part2(directory = dir_neg, smooth = p2_sm, ppmCut = ppm_neg, filenum = p2_fn, thread = p2_th)
           if(!is.null(tbl_neg)) tbl_neg <- tbl_neg %>% dplyr::rename(Negative = Value)
         }
 
@@ -524,20 +612,33 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
     observeEvent(input$apply_opt_params, {
       req(state$opt_table)
       df <- state$opt_table
-      get_val <- function(param_name) {
+      update_text_if <- function(input_id, value) {
+        if(!is.null(value) && length(value) > 0 && !is.na(value[1])) {
+          updateTextInput(session, input_id, value = value[1])
+        }
+      }
+      get_val <- function(param_name, column = NULL) {
         row <- df[df$para == param_name, ]
         if(nrow(row) == 0) return(NULL)
+        if(!is.null(column) && column %in% names(row) && !is.na(row[[column]][1])) return(row[[column]][1])
         # Prioritize Positive, then Negative for display in single inputs
         if("Positive" %in% names(row) && !is.na(row$Positive)) return(row$Positive)
         if("Negative" %in% names(row) && !is.na(row$Negative)) return(row$Negative)
         return(NULL)
       }
 
-      updateTextInput(session, "ppm", value = get_val("ppm"))
-      updateTextInput(session, "snthresh", value = get_val("snthresh"))
-      updateTextInput(session, "noise", value = get_val("noise"))
-      updateTextInput(session, "p_min", value = get_val("p_min"))
-      updateTextInput(session, "p_max", value = get_val("p_max"))
+      update_text_if("ppm_pos", get_val("ppm", "Positive"))
+      update_text_if("ppm_neg", get_val("ppm", "Negative"))
+      update_text_if("snthresh", get_val("snthresh"))
+      update_text_if("noise", get_val("noise"))
+      update_text_if("p_min", get_val("p_min"))
+      update_text_if("p_max", get_val("p_max"))
+      update_text_if("mzdiff", get_val("mzdiff"))
+      update_text_if("integrate", get_val("integrate"))
+      update_text_if("pre_left", get_val("pre_left"))
+      update_text_if("pre_right", get_val("pre_right"))
+      update_text_if("bw", get_val("bw"))
+      update_text_if("min_fraction", get_val("min_fraction"))
 
       shinyalert::shinyalert("Applied", "Optimization parameters have been applied to the sidebar inputs.", type = "success")
     })
@@ -552,10 +653,18 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
         val <- input[[param]]
         if(is.null(val) || val == "") {
           # Fallback defaults if UI is somehow empty
-          defaults <- list(ppm=15, snthresh=10, noise=500, threads=1, p_min=5, p_max=30, min_fraction=0.5, pre_left=3, pre_right=500)
+          defaults <- list(
+            ppm_pos = 15, ppm_neg = 15, snthresh = 10, noise = 500, threads = 1,
+            p_min = 5, p_max = 30, min_fraction = 0.5,
+            pre_left = 3, pre_right = 500, integrate = 2,
+            mzdiff = 0.01, binSize = 0.025, bw = 5
+          )
           return(as.numeric(defaults[[param]]))
         }
         return(as.numeric(val))
+      }
+      get_bool <- function(param) {
+        isTRUE(as.logical(input[[param]] %||% FALSE))
       }
 
       show_progress_modal("Peak Picking", "Initializing...", 5)
@@ -567,14 +676,19 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
             massprocesser::process_data(
               path = file.path(state$raw_ms1_dir, "POS"),
               polarity = "positive",
-              ppm = get_p("ppm"),
+              ppm = get_p("ppm_pos"),
               snthresh = get_p("snthresh"),
               noise = get_p("noise"),
               threads = get_p("threads"),
               peakwidth = c(get_p("p_min"), get_p("p_max")),
               prefilter = c(get_p("pre_left"), get_p("pre_right")),
+              fitgauss = get_bool("fitgauss"),
+              integrate = get_p("integrate"),
+              mzdiff = get_p("mzdiff"),
+              binSize = get_p("binSize"),
+              bw = get_p("bw"),
               min_fraction = get_p("min_fraction"),
-              fill_peaks = FALSE
+              fill_peaks = get_bool("fill_peaks")
             )
             res_file <- file.path(state$raw_ms1_dir, "POS", "Result", "object")
             if(file.exists(res_file)) {
@@ -597,14 +711,19 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
             massprocesser::process_data(
               path = file.path(state$raw_ms1_dir, "NEG"),
               polarity = "negative",
-              ppm = get_p("ppm"),
+              ppm = get_p("ppm_neg"),
               snthresh = get_p("snthresh"),
               noise = get_p("noise"),
               threads = get_p("threads"),
               peakwidth = c(get_p("p_min"), get_p("p_max")),
               prefilter = c(get_p("pre_left"), get_p("pre_right")),
+              fitgauss = get_bool("fitgauss"),
+              integrate = get_p("integrate"),
+              mzdiff = get_p("mzdiff"),
+              binSize = get_p("binSize"),
+              bw = get_p("bw"),
               min_fraction = get_p("min_fraction"),
-              fill_peaks = FALSE
+              fill_peaks = get_bool("fill_peaks")
             )
             res_file <- file.path(state$raw_ms1_dir, "NEG", "Result", "object")
             if(file.exists(res_file)) {
@@ -632,8 +751,19 @@ mod_data_import_server <- function(id, prj_init, global_data, logger = NULL) {
 
         # Display params used
         state$final_params <- data.frame(
-          Parameter = c("ppm", "snthresh", "noise", "peakwidth_min", "peakwidth_max"),
-          Value = c(get_p("ppm"), get_p("snthresh"), get_p("noise"), get_p("p_min"), get_p("p_max"))
+          Parameter = c(
+            "ppm_pos", "ppm_neg", "snthresh", "noise", "threads", "peakwidth_min",
+            "peakwidth_max", "prefilter_peaks", "prefilter_intensity",
+            "fitgauss", "integrate", "mzdiff", "binSize", "bw",
+            "min_fraction", "fill_peaks"
+          ),
+          Value = c(
+            get_p("ppm_pos"), get_p("ppm_neg"), get_p("snthresh"), get_p("noise"), get_p("threads"),
+            get_p("p_min"), get_p("p_max"), get_p("pre_left"),
+            get_p("pre_right"), get_bool("fitgauss"), get_p("integrate"),
+            get_p("mzdiff"), get_p("binSize"), get_p("bw"),
+            get_p("min_fraction"), get_bool("fill_peaks")
+          )
         )
 
         shinyalert::shinyalert("Success", "Peak picking completed!", type = "success")

@@ -771,27 +771,30 @@ collect_ms2_assignment_records <- function(object, variable_info) {
       set_name <- paste0("ms2_set_", set_idx)
     }
 
-    variable_ids <- as.character(ms2_obj@variable_id)
-    if (length(variable_ids) == 0) {
+    variable_ids <- metminer_ms2_slot_vector(ms2_obj, "variable_id", character())
+    spectra_i <- metminer_ms2_slot_vector(ms2_obj, "ms2_spectra", list())
+    n <- min(length(variable_ids), length(spectra_i))
+    if (n == 0) {
       next
     }
+    variable_ids <- as.character(variable_ids[seq_len(n)])
+    spectra_i <- spectra_i[seq_len(n)]
 
     vi_idx <- match(variable_ids, variable_info$variable_id)
-    n <- length(variable_ids)
     record_key <- paste(set_name, seq_len(n), sep = "||")
-    spectra[record_key] <- ms2_obj@ms2_spectra
+    spectra[record_key] <- spectra_i
 
     records[[record_idx]] <- data.frame(
       ms2_set = rep(set_name, n),
       variable_id = variable_ids,
       feature_mz = variable_info$mz[vi_idx],
       feature_rt = variable_info$rt[vi_idx],
-      ms2_spectrum_id = as.character(ms2_obj@ms2_spectrum_id),
-      ms2_mz = as.numeric(ms2_obj@ms2_mz),
-      ms2_rt = as.numeric(ms2_obj@ms2_rt),
-      ms2_file = as.character(ms2_obj@ms2_file),
-      original_mz_tol = rep(as.numeric(ms2_obj@mz_tol)[1], n),
-      original_rt_tol = rep(as.numeric(ms2_obj@rt_tol)[1], n),
+      ms2_spectrum_id = metminer_ms2_slot_vector(ms2_obj, "ms2_spectrum_id", NA_character_, n),
+      ms2_mz = suppressWarnings(as.numeric(metminer_ms2_slot_vector(ms2_obj, "ms2_mz", NA_real_, n))),
+      ms2_rt = suppressWarnings(as.numeric(metminer_ms2_slot_vector(ms2_obj, "ms2_rt", NA_real_, n))),
+      ms2_file = metminer_ms2_slot_vector(ms2_obj, "ms2_file", NA_character_, n),
+      original_mz_tol = suppressWarnings(as.numeric(metminer_ms2_slot_vector(ms2_obj, "mz_tol", NA_real_, n))),
+      original_rt_tol = suppressWarnings(as.numeric(metminer_ms2_slot_vector(ms2_obj, "rt_tol", NA_real_, n))),
       record_key = record_key,
       stringsAsFactors = FALSE
     )
@@ -803,6 +806,20 @@ collect_ms2_assignment_records <- function(object, variable_info) {
   }
 
   list(meta = do.call(rbind, records), spectra = spectra)
+}
+
+metminer_ms2_slot_vector <- function(ms2_obj, slot_name, default, n = NULL) {
+  value <- tryCatch(methods::slot(ms2_obj, slot_name), error = function(e) default)
+  if (is.null(value) || length(value) == 0) {
+    value <- default
+  }
+  if (is.null(n)) {
+    return(value)
+  }
+  if (length(value) >= n) {
+    return(value[seq_len(n)])
+  }
+  rep_len(value, n)
 }
 
 score_ms2_assignment_records <- function(meta, mz_tol_ppm, rt_tol_sec) {

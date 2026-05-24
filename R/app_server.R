@@ -16,7 +16,9 @@ app_server <- function(input, output, session) {
     object_negative.init = NULL, # From resuming
     loaded_objects = list(),
     mass_dataset_dir = NULL,
-    data_export_dir = NULL
+    data_export_dir = NULL,
+    lcms_conditions = NULL,
+    lcms_conditions_text = NULL
   )
 
   # Unified Data Store (The "Ledger" for all modules)
@@ -97,11 +99,11 @@ app_server <- function(input, output, session) {
   # LC-MS method-aware parameter advisor
   mod_parameter_advisor_server("parameter_advisor_1")
   # PlantCyc database construction toolkit
-  mod_plantcyc_database_server("plantcyc_database_1")
+  mod_plantcyc_database_server("plantcyc_database_1", global_data = global_data)
   # PlantCyc local licensed PGDB construction toolkit
   mod_plantcyc_pgdb_builder_server("plantcyc_pgdb_builder_1")
   # KEGG organism database construction toolkit
-  mod_kegg_database_server("kegg_database_1")
+  mod_kegg_database_server("kegg_database_1", global_data = global_data)
   # PlantCyc/KEGG compound ID mapping toolkit
   mod_id_mapping_server("id_mapping_1")
   # Global expandable AI assistant

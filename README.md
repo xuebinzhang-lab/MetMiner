@@ -50,6 +50,11 @@ The module supports local desktop persistence for provider settings and API keys
 
 Implementation details are documented in `inst/app/ai_annotation_principles.md`.
 
+### MetMiner Bot Module Advisors
+MetMiner Bot now includes module-aware advisor commands that can read the active Shiny state and project objects before answering parameter questions. Users can choose an advisor from the Bot command menu or type tags such as `@data-import-advisor`, `@noise-filter-advisor`, `@outlier-advisor`, `@missing-value-advisor`, `@normalization-advisor`, `@feature-network-advisor`, `@annotation-advisor`, `@annotation-filter-advisor`, `@differential-advisor`, `@enrichment-advisor`, and `@database-advisor`.
+
+Each advisor packages current UI parameters, available positive/negative `mass_dataset` objects, summarized sample/feature missingness, annotation/filtering results, differential and enrichment tables, or KEGG/PlantCyc database status as relevant to that module. The Bot uses this context to give conservative, evidence-grounded recommendations, for example whether KNN imputation parameters are reasonable, whether a PCA outlier should be removed, whether volcano-plot thresholds are too permissive, or why PlantCyc enrichment lacks query IDs.
+
 ---
 
 ## 🧠 System Architecture & Mind Map

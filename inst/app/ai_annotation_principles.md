@@ -19,6 +19,11 @@ relationships, and to avoid fabricating literature or DOI information.
 
 For a queried compound name or feature ID, MetMiner collects:
 
+- the annotation evidence layer: genome-informed KEGG/PlantCyc reaction
+  candidate, public MS2 spectral evidence, or optional local/custom spectral
+  evidence;
+- strict core-adduct pass/fail status for genome-informed KEGG/PlantCyc
+  candidates;
 - non-redundant annotation rows from the annotation filter module;
 - the full redundancy audit table, including keep/drop status and reasons;
 - raw metID annotation candidates, including adduct and annotation level;
@@ -39,18 +44,28 @@ same static evidence prefix.
 
 The reviewer follows the same logic expected from a human LC-MS analyst:
 
-1. Prioritize higher annotation levels and stronger metID scores, but do not
+1. Separate Layer 1 genome-informed KEGG/PlantCyc reaction candidates from
+   Layer 2 spectral evidence. Layer 1 candidates require strict core-adduct
+   support and should remain putative unless MS2, standards, or orthogonal
+   evidence supports them.
+2. Use public MS2 libraries as the default Layer 2 evidence for validating
+   Layer 1 candidates and for supplementing real metabolites that may be absent
+   from reaction databases.
+3. Treat local/custom standard libraries as optional enhancement evidence, not
+   as a required input. When present, they can support the highest confidence
+   only if RT, precursor, and MS2 evidence are available.
+4. Prioritize higher annotation levels and stronger metID scores, but do not
    treat mass matching alone as confirmation.
-2. Check whether the selected feature is locally supported by co-eluting
+5. Check whether the selected feature is locally supported by co-eluting
    isotope, adduct, or ISF relationships.
-3. Inspect whether the same compound name or same m/z appears at multiple
+6. Inspect whether the same compound name or same m/z appears at multiple
    distant RTs.
-4. Treat resolved recurrent ISFs and suspected interference features as
+7. Treat resolved recurrent ISFs and suspected interference features as
    low-confidence annotation candidates unless a local parent explains them.
-5. Compare positive and negative mode evidence when both are present.
-6. Use MS2 fragments as supporting or conflicting evidence, especially when
+8. Compare positive and negative mode evidence when both are present.
+9. Use MS2 fragments as supporting or conflicting evidence, especially when
    diagnostic fragments or neutral-loss patterns are available.
-7. Use literature only as biological context; literature cannot override weak
+10. Use literature only as biological context; literature cannot override weak
    spectral or chromatographic evidence.
 
 The first Review action asks for a structured report with these sections:
@@ -132,4 +147,3 @@ matches into confirmed annotations, and it cannot prove biological occurrence
 without experimental or literature evidence. Final confidence still depends on
 standard validation principles: authentic standards, RT match, high-quality
 MS2 library match, orthogonal chromatography, and biological plausibility.
-

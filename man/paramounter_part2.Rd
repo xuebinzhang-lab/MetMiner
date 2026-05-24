@@ -17,13 +17,18 @@ paramounter_part2(
 \arguments{
 \item{directory}{The data path for mzXML files.}
 
-\item{massSDrange}{The range of standard deviations for mass differences, default 2.}
+\item{massSDrange}{Retained for backward compatibility; currently not used
+by part 2.}
 
-\item{smooth}{Chromatographic smoothness level (default 0).}
+\item{smooth}{Numeric smoothing window level for the internal EIC smoother;
+0 disables smoothing (default 0).}
 
-\item{cutoff}{The ppm percentage for cutoff (default 0.95).}
+\item{cutoff}{Retained for backward compatibility; currently not used by
+part 2.}
 
-\item{filenum}{Number of files to use (3, 5, or "all").}
+\item{filenum}{Number of mzXML files to use (3, 5, or "all"). Numeric
+choices are sampled evenly across the file list rather than taking only
+the first files.}
 
 \item{thread}{Number of threads for parallel processing.}
 

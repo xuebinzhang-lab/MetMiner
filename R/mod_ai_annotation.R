@@ -327,6 +327,18 @@ mod_ai_annotation_server <- function(id, global_data, prj_init) {
       connection_status(sprintf("Loaded local LLM config: %s / %s", cfg$provider %||% "openai", cfg$model %||% ""))
     }, once = TRUE)
 
+    observeEvent(prj_init$lcms_conditions_text, {
+      txt <- trimws(prj_init$lcms_conditions_text %||% "")
+      if (!nzchar(txt)) {
+        return()
+      }
+      current <- trimws(input$lc_conditions %||% "")
+      default_txt <- trimws("Instrument: \nColumn/stationary phase: \nMobile phase A/B: \nGradient: \nIon source: ESI\nCollision energy: \nNotes:")
+      if (!nzchar(current) || identical(current, default_txt)) {
+        updateTextAreaInput(session, "lc_conditions", value = txt)
+      }
+    }, ignoreInit = FALSE)
+
     observeEvent(input$provider, {
       if (identical(input$provider, loaded_config_provider())) {
         loaded_config_provider(NULL)

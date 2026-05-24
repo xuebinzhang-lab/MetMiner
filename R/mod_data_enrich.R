@@ -28,8 +28,12 @@ mod_data_enrich_ui <- function(id) {
         radioButtons(
           ns("query_source"),
           "Query source",
-          choices = c("Annotation filtering result" = "annotation_filter", "Upload ID list" = "upload"),
-          selected = "annotation_filter"
+          choices = c(
+            "Differential metabolites" = "differential",
+            "Annotation filtering result" = "annotation_filter",
+            "Upload ID list" = "upload"
+          ),
+          selected = "differential"
         ),
         selectInput(
           ns("annotation_table"),
@@ -64,14 +68,26 @@ mod_data_enrich_ui <- function(id) {
         br(),
         bslib::card(
           full_screen = TRUE,
-          bslib::card_header(
-            div(
-              class = "d-flex justify-content-between align-items-center",
-              span("Enrichment Result"),
-              downloadButton(ns("download_result"), "Download CSV", class = "btn-sm btn-success")
+          bslib::navset_tab(
+            bslib::nav_panel(
+              "Plots",
+              bslib::layout_columns(
+                col_widths = c(6, 6),
+                bslib::card(bslib::card_header("Bubble Plot"), plotly::plotlyOutput(ns("bubble_plot"), height = "420px")),
+                bslib::card(bslib::card_header("Bar Plot"), plotly::plotlyOutput(ns("bar_plot"), height = "420px"))
+              ),
+              br(),
+              bslib::card(
+                bslib::card_header(textOutput(ns("selected_pathway_title"), inline = TRUE)),
+                DT::dataTableOutput(ns("tbl_pathway_features"))
+              )
+            ),
+            bslib::nav_panel(
+              "Result Table",
+              div(class = "d-flex justify-content-end mb-2", downloadButton(ns("download_result"), "Download CSV", class = "btn-sm btn-success")),
+              DT::dataTableOutput(ns("tbl_result"))
             )
-          ),
-          DT::dataTableOutput(ns("tbl_result"))
+          )
         )
       )
     )
@@ -86,31 +102,95 @@ mod_data_enrich_ui <- function(id) {
 #' @noRd
 mod_data_enrich_server <- function(id, global_data, prj_init) {
   moduleServer(id, function(input, output, session) {
-    state <- reactiveValues(result = NULL, result_table = data.frame(), query_ids = character(), pathway_db = NULL, status = "No enrichment result yet.")
+    state <- reactiveValues(
+      result = NULL,
+      result_table = data.frame(),
+      query_ids = character(),
+      query_table = data.frame(),
+      pathway_db = NULL,
+      selected_pathway = NULL,
+      status = "No enrichment result yet."
+    )
 
     current_id_column <- reactive({
       if (identical(input$database_type, "plantcyc")) "PlantCyc.ID" else "KEGG.ID"
     })
+
+    observe({
+      global_data$enrichment_advisor_state <- list(
+        available = TRUE,
+        database_type = input$database_type %||% NA_character_,
+        id_column = if (identical(input$database_type, "plantcyc")) "PlantCyc.ID" else "KEGG.ID",
+        query_source = input$query_source %||% NA_character_,
+        annotation_table = input$annotation_table %||% NA_character_,
+        query_file_name = input$query_file$name %||% NA_character_,
+        pathway_database_file = input$pathway_db$name %||% NA_character_,
+        test_method = input$method %||% NA_character_,
+        p_adjust_method = input$p_adjust %||% NA_character_,
+        min_pathway_size = input$min_pathway_size %||% NA_integer_,
+        query_ids = length(state$query_ids %||% character()),
+        result_rows = nrow(state$result_table %||% data.frame()),
+        mapped_pathways = if (nrow(state$result_table %||% data.frame()) > 0 && "mapped_number" %in% colnames(state$result_table)) {
+          sum(state$result_table$mapped_number > 0, na.rm = TRUE)
+        } else NA_integer_,
+        fdr_0_05 = if (nrow(state$result_table %||% data.frame()) > 0 && "p_value_adjust" %in% colnames(state$result_table)) {
+          sum(state$result_table$p_value_adjust < 0.05, na.rm = TRUE)
+        } else NA_integer_,
+        selected_pathway = state$selected_pathway %||% NA_character_,
+        status = state$status,
+        updated_at = as.character(Sys.time())
+      )
+    })
+
+    make_enrichment_query <- function(id_column) {
+      if (identical(input$query_source, "upload")) {
+        req(input$query_file)
+        ids <- metminer_read_query_ids(input$query_file$datapath, id_column = id_column)
+        list(ids = ids, table = data.frame(query_id = ids, stringsAsFactors = FALSE))
+      } else if (identical(input$query_source, "differential")) {
+        metminer_query_ids_from_differential_result(
+          differential_result = global_data$differential_result,
+          annotation_filter_result = global_data$annotation_filter_result,
+          annotated_objects = list(
+            positive = global_data$object_pos_annotated,
+            negative = global_data$object_neg_annotated
+          ),
+          id_column = id_column
+        )
+      } else {
+        ids <- metminer_query_ids_from_annotation_filter(
+          filter_result = global_data$annotation_filter_result,
+          id_column = id_column,
+          table = input$annotation_table
+        )
+        list(ids = ids, table = data.frame(query_id = ids, stringsAsFactors = FALSE))
+      }
+    }
 
     observeEvent(input$run_enrich, {
       req(input$pathway_db)
       tryCatch({
         pathway_db <- metminer_load_pathway_database(input$pathway_db$datapath)
         id_column <- current_id_column()
+        query <- make_enrichment_query(id_column)
 
-        query_ids <- if (identical(input$query_source, "upload")) {
-          req(input$query_file)
-          metminer_read_query_ids(input$query_file$datapath, id_column = id_column)
-        } else {
-          metminer_query_ids_from_annotation_filter(
-            filter_result = global_data$annotation_filter_result,
-            id_column = id_column,
-            table = input$annotation_table
-          )
-        }
+        query_ids <- query$ids
+        query_table <- query$table
 
         if (length(query_ids) == 0) {
-          stop("No query IDs were found. Check annotation filtering result, ID mapping, or uploaded query file.", call. = FALSE)
+          diag <- query$diagnostics %||% list()
+          detail <- if (identical(input$query_source, "differential")) {
+            paste0(
+              " Differential rows: ", diag$total_rows %||% "unknown",
+              "; Up/Down rows: ", diag$changed_rows %||% "unknown",
+              "; annotation lookup rows: ", diag$lookup_rows %||% "unknown",
+              "; ", id_column, " rows: ", diag$id_rows %||% 0, "."
+            )
+          } else {
+            ""
+          }
+          stop(paste0("No query IDs were found for ", id_column, ".", detail,
+                      " Check annotation filtering result, ID mapping, or uploaded query file."), call. = FALSE)
         }
 
         enrich <- if (identical(input$database_type, "plantcyc")) {
@@ -148,7 +228,9 @@ mod_data_enrich_server <- function(id, global_data, prj_init) {
         state$result <- enrich
         state$result_table <- result_table
         state$query_ids <- query_ids
+        state$query_table <- query_table
         state$pathway_db <- pathway_db
+        state$selected_pathway <- if (nrow(result_table) > 0) result_table$pathway_id[1] else NULL
         global_data$enrichment_result <- enrich
 
         if (!is.null(prj_init$mass_dataset_dir)) {
@@ -180,7 +262,54 @@ mod_data_enrich_server <- function(id, global_data, prj_init) {
 
     output$tbl_result <- DT::renderDataTable({
       req(nrow(state$result_table) > 0)
-      DT::datatable(state$result_table, rownames = FALSE, options = list(scrollX = TRUE, pageLength = 15))
+      DT::datatable(state$result_table, rownames = FALSE, selection = "single", options = list(scrollX = TRUE, pageLength = 15))
+    })
+
+    observeEvent(input$tbl_result_rows_selected, {
+      idx <- input$tbl_result_rows_selected
+      if (length(idx) == 1 && nrow(state$result_table) >= idx) {
+        state$selected_pathway <- state$result_table$pathway_id[idx]
+      }
+    })
+
+    observeEvent(plotly::event_data("plotly_click", source = "enrichment_bubble"), {
+      click <- plotly::event_data("plotly_click", source = "enrichment_bubble", priority = "event")
+      if (!is.null(click$key) && has_text(click$key)) {
+        state$selected_pathway <- as.character(click$key[1])
+      }
+    }, ignoreInit = TRUE)
+
+    output$bubble_plot <- plotly::renderPlotly({
+      req(nrow(state$result_table) > 0)
+      metminer_plot_enrichment_bubble(state$result, state$result_table)
+    })
+
+    output$bar_plot <- plotly::renderPlotly({
+      req(nrow(state$result_table) > 0)
+      metminer_plot_enrichment_bar(state$result, state$result_table)
+    })
+
+    selected_pathway_features <- reactive({
+      req(state$selected_pathway)
+      metminer_enrichment_pathway_feature_table(
+        result_table = state$result_table,
+        query_table = state$query_table,
+        pathway_id = state$selected_pathway,
+        id_column = current_id_column()
+      )
+    })
+
+    output$selected_pathway_title <- renderText({
+      pid <- state$selected_pathway
+      if (is.null(pid)) return("Differential metabolites in selected pathway")
+      hit <- state$result_table[state$result_table$pathway_id == pid, , drop = FALSE]
+      if (nrow(hit) == 0) return(paste("Selected pathway:", pid))
+      paste0("Differential metabolites in ", hit$pathway_name[1], " (", pid, ")")
+    })
+
+    output$tbl_pathway_features <- DT::renderDataTable({
+      tbl <- selected_pathway_features()
+      DT::datatable(tbl, rownames = FALSE, options = list(scrollX = TRUE, pageLength = 10))
     })
 
     output$download_result <- downloadHandler(

@@ -158,6 +158,41 @@ mod_data_impute_server <- function(id, global_data, prj_init) {
       }
     }
 
+    observe({
+      global_data$missing_value_advisor_state <- list(
+        available = TRUE,
+        impute_method = input$impute_method %||% "knn",
+        parameters = list(
+          knn = list(
+            k = input$knn_k %||% 10,
+            rowmax = input$knn_rowmax %||% 0.5,
+            colmax = input$knn_colmax %||% 0.8,
+            maxp = input$knn_maxp %||% 1500,
+            rng_seed = input$knn_seed %||% 362436069
+          ),
+          rf = list(
+            maxiter = input$rf_maxiter %||% 10,
+            ntree = input$rf_ntree %||% 100,
+            decreasing = input$rf_decreasing %||% "FALSE"
+          ),
+          pca = list(
+            nPcs = input$pca_nPcs %||% 2,
+            bpca_maxSteps = input$bpca_maxSteps %||% 100,
+            bpca_threshold = input$bpca_threshold %||% 1e-04
+          )
+        ),
+        input_objects = list(
+          positive_available = !is.null(get_input_obj("positive")),
+          negative_available = !is.null(get_input_obj("negative"))
+        ),
+        output_objects = list(
+          positive_available = !is.null(global_data$object_pos_impute),
+          negative_available = !is.null(global_data$object_neg_impute)
+        ),
+        updated_at = as.character(Sys.time())
+      )
+    })
+
     # 2. Method Summary Output
     output$method_summary <- renderText({
       m <- input$impute_method

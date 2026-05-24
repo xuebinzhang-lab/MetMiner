@@ -214,13 +214,18 @@ metminer_database_label <- function(database, fallback = "database") {
   if (!has_text(label)) fallback else as.character(label)
 }
 
-#' Collect annotation databases from built-in ids and a local folder
+#' Collect annotation databases from built-in ids, KEGG output, and custom folders
 #'
 #' @noRd
-metminer_collect_annotation_databases <- function(builtin_ids = character(), local_dir = NULL) {
+metminer_collect_annotation_databases <- function(builtin_ids = character(),
+                                                  kegg_dir = NULL,
+                                                  custom_dir = NULL,
+                                                  local_dir = NULL) {
   builtin_ids <- metminer_expand_builtin_annotation_ids(builtin_ids)
   dbs <- c(
     lapply(builtin_ids, metminer_load_builtin_database),
+    metminer_load_local_databases(kegg_dir),
+    metminer_load_local_databases(custom_dir),
     metminer_load_local_databases(local_dir)
   )
 
@@ -1016,6 +1021,22 @@ metminer_prepare_annotation_candidates <- function(annotation_table) {
     candidates$Adduct <- NA_character_
   }
 
+  candidates <- metminer_standardize_review_annotation_cols(candidates)
+  if (!"annotation_layer" %in% colnames(candidates) || all(!has_text(candidates$annotation_layer))) {
+    plantcyc_id <- candidates$PlantCyc.ID
+    plantcyc_id[!has_text(plantcyc_id) & has_text(candidates$BIOCYC.ID)] <-
+      candidates$BIOCYC.ID[!has_text(plantcyc_id) & has_text(candidates$BIOCYC.ID)]
+    candidates$annotation_layer <- metminer_annotation_evidence_layer(
+      database = candidates$Database,
+      kegg_id = candidates$KEGG.ID,
+      plantcyc_id = plantcyc_id,
+      lab_id = candidates$Lab.ID
+    )
+  }
+  if (!"evidence_scope" %in% colnames(candidates) || all(!has_text(candidates$evidence_scope))) {
+    candidates$evidence_scope <- metminer_annotation_evidence_scope(candidates$annotation_layer)
+  }
+
   candidates$variable_id <- as.character(candidates$variable_id)
   candidates$Level <- suppressWarnings(as.integer(candidates$Level))
   candidates$Total.score <- suppressWarnings(as.numeric(candidates$Total.score))
@@ -1255,6 +1276,7 @@ metminer_select_network_refined_candidates <- function(candidates, use_network =
     # No network scores were applied — fall back to metid ranking
     selected_idx <- vapply(split(seq_len(nrow(candidates)), candidates$variable_id), function(idx) {
       idx[order(
+        metminer_annotation_layer_priority(candidates$annotation_layer[idx]),
         candidates$Level[idx],
         -candidates$Total.score[idx],
         candidates$candidate_rank[idx],
@@ -1265,6 +1287,7 @@ metminer_select_network_refined_candidates <- function(candidates, use_network =
     selected_idx <- vapply(split(seq_len(nrow(candidates)), candidates$variable_id), function(idx) {
       idx[order(
         -candidates$final_score[idx],
+        metminer_annotation_layer_priority(candidates$annotation_layer[idx]),
         candidates$Level[idx],
         -candidates$Total.score[idx],
         candidates$candidate_rank[idx],
@@ -1347,8 +1370,8 @@ interpret_annotation_subnetworks <- function(candidates, feature_selection, edge
 
     parent_id <- choose_subnetwork_parent(ids, subnet_edges, feature_selection, feature_info)
     parent_sel <- selection_by_feature[[parent_id]]
-    parent_compound_key <- if (!is.null(parent_sel) && nrow(parent_sel) > 0) parent_sel$compound_key[1] else NA_character_
-    parent_compound <- if (!is.null(parent_sel) && "Compound.name" %in% colnames(parent_sel)) parent_sel$Compound.name[1] else NA_character_
+    parent_compound_key <- metminer_scalar_col(parent_sel, "compound_key", NA_character_)
+    parent_compound <- metminer_scalar_col(parent_sel, "Compound.name", NA_character_)
 
     feature_roles <- lapply(ids, function(feature_id) {
       sel <- selection_by_feature[[feature_id]]
@@ -1358,21 +1381,21 @@ interpret_annotation_subnetworks <- function(candidates, feature_selection, edge
 
       data.frame(
         sub_network = sid,
-        rt = if (!is.null(info) && nrow(info) > 0) round(info$rt[1], 3) else NA_real_,
+        rt = round(suppressWarnings(as.numeric(metminer_scalar_col(info, "rt", NA_real_))), 3),
         feature_id = feature_id,
-        mz = if (!is.null(info) && nrow(info) > 0) round(info$mz[1], 5) else NA_real_,
-        mean_area = if (!is.null(info) && nrow(info) > 0) round(info$mean_area[1], 3) else NA_real_,
+        mz = round(suppressWarnings(as.numeric(metminer_scalar_col(info, "mz", NA_real_))), 5),
+        mean_area = round(suppressWarnings(as.numeric(metminer_scalar_col(info, "mean_area", NA_real_))), 3),
         parent_feature_id = parent_id,
-        network_role = relation$role,
-        relation_to_parent = relation$relation,
-        edge_evidence = relation$edge_evidence,
-        selected_compound = if (!is.null(sel) && "Compound.name" %in% colnames(sel)) sel$Compound.name[1] else NA_character_,
-        selected_adduct = if (!is.null(sel) && "Adduct" %in% colnames(sel)) sel$Adduct[1] else NA_character_,
-        compound_key = if (!is.null(sel) && "compound_key" %in% colnames(sel)) sel$compound_key[1] else NA_character_,
-        metid_level = if (!is.null(sel) && "Level" %in% colnames(sel)) sel$Level[1] else NA_integer_,
-        metid_rank = if (!is.null(sel) && "candidate_rank" %in% colnames(sel)) sel$candidate_rank[1] else NA_integer_,
-        metid_total_score = if (!is.null(sel) && "Total.score" %in% colnames(sel)) round(sel$Total.score[1], 4) else NA_real_,
-        network_final_score = if (!is.null(sel) && "final_score" %in% colnames(sel)) sel$final_score[1] else NA_real_,
+        network_role = metminer_scalar_value(relation$role, "network_neighbor"),
+        relation_to_parent = metminer_scalar_value(relation$relation, "connected_indirectly"),
+        edge_evidence = metminer_scalar_value(relation$edge_evidence, ""),
+        selected_compound = metminer_scalar_col(sel, "Compound.name", NA_character_),
+        selected_adduct = metminer_scalar_col(sel, "Adduct", NA_character_),
+        compound_key = metminer_scalar_col(sel, "compound_key", NA_character_),
+        metid_level = suppressWarnings(as.integer(metminer_scalar_col(sel, "Level", NA_integer_))),
+        metid_rank = suppressWarnings(as.integer(metminer_scalar_col(sel, "candidate_rank", NA_integer_))),
+        metid_total_score = round(suppressWarnings(as.numeric(metminer_scalar_col(sel, "Total.score", NA_real_))), 4),
+        network_final_score = suppressWarnings(as.numeric(metminer_scalar_col(sel, "final_score", NA_real_))),
         annotation_interpretation = interpretation,
         stringsAsFactors = FALSE
       )
@@ -1385,9 +1408,9 @@ interpret_annotation_subnetworks <- function(candidates, feature_selection, edge
       sub_network = sid,
       rt_center = round(stats::median(feature_roles$rt, na.rm = TRUE), 3),
       parent_feature_id = parent_id,
-      putative_real_compound = parent_compound %||% NA_character_,
-      parent_annotation_level = if (!is.null(parent_sel) && "Level" %in% colnames(parent_sel)) parent_sel$Level[1] else NA_integer_,
-      parent_candidate_rank = if (!is.null(parent_sel) && "candidate_rank" %in% colnames(parent_sel)) parent_sel$candidate_rank[1] else NA_integer_,
+      putative_real_compound = metminer_scalar_value(parent_compound, NA_character_),
+      parent_annotation_level = suppressWarnings(as.integer(metminer_scalar_col(parent_sel, "Level", NA_integer_))),
+      parent_candidate_rank = suppressWarnings(as.integer(metminer_scalar_col(parent_sel, "candidate_rank", NA_integer_))),
       feature_count = nrow(feature_roles),
       isotope_features = sum(feature_roles$network_role == "isotope_of_parent"),
       adduct_features = sum(feature_roles$network_role == "adduct_of_parent"),
@@ -1403,6 +1426,20 @@ interpret_annotation_subnetworks <- function(candidates, feature_selection, edge
     feature_role_interpretation = if (length(role_rows) > 0) do.call(rbind, role_rows) else data.frame(),
     subnetwork_hypothesis = if (length(hypothesis_rows) > 0) do.call(rbind, hypothesis_rows) else data.frame()
   )
+}
+
+metminer_scalar_col <- function(x, col, default = NA_character_) {
+  if (is.null(x) || nrow(x) == 0 || !col %in% colnames(x)) {
+    return(default)
+  }
+  metminer_scalar_value(x[[col]], default)
+}
+
+metminer_scalar_value <- function(x, default = NA_character_) {
+  if (is.null(x) || length(x) == 0) {
+    return(default)
+  }
+  x[1]
 }
 
 choose_subnetwork_parent <- function(feature_ids, subnet_edges, feature_selection, feature_info) {
@@ -1625,12 +1662,119 @@ metminer_annotation_adduct_priority <- function(adduct, mode = c("positive", "ne
   out
 }
 
+metminer_annotation_evidence_layer <- function(database = NULL,
+                                               kegg_id = NULL,
+                                               plantcyc_id = NULL,
+                                               lab_id = NULL) {
+  n <- max(length(database %||% NA_character_),
+           length(kegg_id %||% NA_character_),
+           length(plantcyc_id %||% NA_character_),
+           length(lab_id %||% NA_character_))
+  database <- rep_len(as.character(database %||% NA_character_), n)
+  kegg_id <- rep_len(as.character(kegg_id %||% NA_character_), n)
+  plantcyc_id <- rep_len(as.character(plantcyc_id %||% NA_character_), n)
+  lab_id <- rep_len(as.character(lab_id %||% NA_character_), n)
+
+  db_lower <- tolower(database)
+  out <- rep("other_spectral", n)
+  genome_hit <- grepl("plantcyc|biocyc|kegg|pgdb|cyc", db_lower) |
+    has_text(kegg_id) | has_text(plantcyc_id)
+  public_hit <- grepl("hmdb|massbank|mona|gnps|respect|rist|nist|mzcloud|massive", db_lower)
+  local_hit <- grepl("lab|standard|in-house|inhouse|custom|user", db_lower) |
+    (grepl("local", db_lower) & !genome_hit & !public_hit)
+
+  out[genome_hit] <- "genome_reaction"
+  out[public_hit] <- "public_ms2"
+  out[local_hit] <- "local_spectral_optional"
+  out
+}
+
+metminer_annotation_layer_priority <- function(layer) {
+  layer <- as.character(layer %||% NA_character_)
+  dplyr::case_when(
+    layer == "local_spectral_optional" ~ 1L,
+    layer == "public_ms2" ~ 2L,
+    layer == "genome_reaction" ~ 3L,
+    layer == "network_integrated" ~ 4L,
+    TRUE ~ 5L
+  )
+}
+
+metminer_annotation_evidence_scope <- function(layer) {
+  layer <- as.character(layer %||% NA_character_)
+  dplyr::case_when(
+    layer == "genome_reaction" ~ "Layer 1: genome-informed KEGG/PlantCyc reaction candidate",
+    layer == "public_ms2" ~ "Layer 2a: public MS2 spectral evidence",
+    layer == "local_spectral_optional" ~ "Layer 2b: optional local standard/custom spectral evidence",
+    TRUE ~ "Layer 2: spectral or external database evidence"
+  )
+}
+
+metminer_is_genome_layer <- function(layer) {
+  as.character(layer %||% NA_character_) == "genome_reaction"
+}
+
+metminer_is_strict_core_adduct <- function(adduct, mode = c("positive", "negative"), advice = NULL) {
+  mode <- match.arg(mode)
+  metminer_annotation_adduct_priority(adduct, mode, advice) == 1L
+}
+
+metminer_annotation_level_label <- function(level,
+                                            layer = NA_character_,
+                                            strict_core_adduct = NA,
+                                            spectral_match = NA) {
+  level <- suppressWarnings(as.integer(level))
+  layer <- as.character(layer %||% NA_character_)
+  n <- max(length(level), length(layer), length(strict_core_adduct %||% NA), length(spectral_match %||% NA))
+  level <- rep_len(level, n)
+  layer <- rep_len(layer, n)
+  strict_core_adduct <- rep_len(as.logical(strict_core_adduct %||% NA), n)
+  spectral_match <- rep_len(as.logical(spectral_match %||% NA), n)
+  spectral_match <- (spectral_match %in% TRUE) | layer %in% c("public_ms2", "local_spectral_optional", "other_spectral")
+
+  dplyr::case_when(
+    layer == "local_spectral_optional" & !is.na(level) & level <= 1L ~ "Level 1: local standard/custom library match",
+    layer == "local_spectral_optional" & !is.na(level) & level <= 2L ~ "Level 2b: local spectral evidence, optional module",
+    layer == "public_ms2" & !is.na(level) & level <= 2L ~ "Level 2: public MS2 spectral evidence",
+    layer == "genome_reaction" & spectral_match & !is.na(level) & level <= 2L ~ "Level 2a: MS2 evidence with genome/reaction support",
+    layer == "genome_reaction" & strict_core_adduct ~ "Level 3: genome/reaction-supported strict-adduct candidate",
+    !is.na(level) & level >= 4L ~ "Level 4: low-confidence formula/class-level candidate",
+    TRUE ~ "Unassigned/needs review"
+  )
+}
+
+metminer_add_annotation_layer_columns <- function(x, mode = c("positive", "negative"), adduct_advice = NULL) {
+  mode <- match.arg(mode)
+  if (is.null(x) || nrow(x) == 0) return(x)
+  x <- metminer_standardize_review_annotation_cols(as.data.frame(x, stringsAsFactors = FALSE))
+  plantcyc_id <- x$PlantCyc.ID
+  plantcyc_id[!has_text(plantcyc_id) & has_text(x$BIOCYC.ID)] <- x$BIOCYC.ID[!has_text(plantcyc_id) & has_text(x$BIOCYC.ID)]
+  x$annotation_layer <- metminer_annotation_evidence_layer(
+    database = x$Database,
+    kegg_id = x$KEGG.ID,
+    plantcyc_id = plantcyc_id,
+    lab_id = x$Lab.ID
+  )
+  x$evidence_scope <- metminer_annotation_evidence_scope(x$annotation_layer)
+  x$core_adduct_match <- metminer_is_strict_core_adduct(x$Adduct, mode, adduct_advice)
+  x$strict_genome_adduct_pass <- !metminer_is_genome_layer(x$annotation_layer) | x$core_adduct_match
+  x$metminer_confidence_level <- metminer_annotation_level_label(
+    level = x$Level,
+    layer = x$annotation_layer,
+    strict_core_adduct = x$core_adduct_match,
+    spectral_match = x$annotation_layer %in% c("public_ms2", "local_spectral_optional", "other_spectral")
+  )
+  x
+}
+
 metminer_empty_annotation_review_table <- function(type = c("expand", "collapse")) {
   type <- match.arg(type)
   cols <- c(
     "Variable_id", "mz", "rt", "ms2_spectrum_id", "Compound.name",
     "KEGG.ID", "PlantCyc.ID", "Lab.ID", "Adduct", "mz.error", "mz.match.score",
-    "Total.score", "Database", "Level", "Sub_net_id"
+    "Total.score", "Database", "Level", "annotation_layer", "evidence_scope",
+    "core_adduct_match", "strict_genome_adduct_pass", "metminer_confidence_level",
+    "Sub_net_id"
   )
   if (identical(type, "expand")) {
     cols <- c(cols, "coelution_type", "Represent_feature", "mode", "annotation_rank", "adduct_priority")
@@ -1698,22 +1842,26 @@ metminer_apply_compound_id_mapping <- function(x, mapping = NULL) {
   if (is.null(x) || nrow(x) == 0) return(x)
   if (!"PlantCyc.ID" %in% colnames(x)) x$PlantCyc.ID <- NA_character_
   if (!"KEGG.ID" %in% colnames(x)) x$KEGG.ID <- NA_character_
-  if (is.null(mapping) || nrow(mapping) == 0 || !all(c("PlantCyc.ID", "KEGG.ID") %in% colnames(mapping))) {
-    return(x)
-  }
+  if (!"Lab.ID" %in% colnames(x)) x$Lab.ID <- NA_character_
+  if (!"Database" %in% colnames(x)) x$Database <- NA_character_
 
   lab <- trimws(as.character(x$Lab.ID %||% NA_character_))
   kegg <- trimws(as.character(x$KEGG.ID %||% NA_character_))
   plant <- trimws(as.character(x$PlantCyc.ID %||% NA_character_))
-  plant[!has_text(plant) & has_text(lab) & !grepl("^C[0-9]{5}$", lab, perl = TRUE)] <- lab[!has_text(plant) & has_text(lab) & !grepl("^C[0-9]{5}$", lab, perl = TRUE)]
+  database <- tolower(trimws(as.character(x$Database %||% NA_character_)))
+  is_plantcyc <- grepl("plantcyc|pmn|biocyc|pgdb", database, perl = TRUE)
+  fill_plant_from_lab <- !has_text(plant) & is_plantcyc & has_text(lab) & !grepl("^C[0-9]{5}$", lab, perl = TRUE)
+  plant[fill_plant_from_lab] <- lab[fill_plant_from_lab]
   kegg[!has_text(kegg) & has_text(lab) & grepl("^C[0-9]{5}$", lab, perl = TRUE)] <- lab[!has_text(kegg) & has_text(lab) & grepl("^C[0-9]{5}$", lab, perl = TRUE)]
 
-  k_by_plant <- stats::setNames(mapping$KEGG.ID, mapping$PlantCyc.ID)
-  p_by_kegg <- stats::setNames(mapping$PlantCyc.ID, mapping$KEGG.ID)
-  fill_k <- !has_text(kegg) & has_text(plant) & plant %in% names(k_by_plant)
-  kegg[fill_k] <- unname(k_by_plant[plant[fill_k]])
-  fill_p <- !has_text(plant) & has_text(kegg) & kegg %in% names(p_by_kegg)
-  plant[fill_p] <- unname(p_by_kegg[kegg[fill_p]])
+  if (!is.null(mapping) && nrow(mapping) > 0 && all(c("PlantCyc.ID", "KEGG.ID") %in% colnames(mapping))) {
+    k_by_plant <- stats::setNames(mapping$KEGG.ID, mapping$PlantCyc.ID)
+    p_by_kegg <- stats::setNames(mapping$PlantCyc.ID, mapping$KEGG.ID)
+    fill_k <- !has_text(kegg) & has_text(plant) & plant %in% names(k_by_plant)
+    kegg[fill_k] <- unname(k_by_plant[plant[fill_k]])
+    fill_p <- !has_text(plant) & has_text(kegg) & kegg %in% names(p_by_kegg)
+    plant[fill_p] <- unname(p_by_kegg[kegg[fill_p]])
+  }
 
   x$KEGG.ID <- kegg
   x$PlantCyc.ID <- plant
@@ -1735,11 +1883,18 @@ metminer_select_top_annotation_candidates <- function(object, mode = c("positive
   candidates$variable_id <- as.character(candidates$variable_id)
   candidates$Level <- suppressWarnings(as.integer(candidates$Level))
   candidates$Total.score <- suppressWarnings(as.numeric(candidates$Total.score))
+  candidates <- metminer_add_annotation_layer_columns(candidates, mode, adduct_advice)
+  candidates <- candidates[candidates$strict_genome_adduct_pass %in% TRUE, , drop = FALSE]
+  if (nrow(candidates) == 0) {
+    return(data.frame())
+  }
   candidates$adduct_priority <- metminer_annotation_adduct_priority(candidates$Adduct, mode, adduct_advice)
   candidates$mode <- mode
 
   candidates <- candidates[order(
     candidates$variable_id,
+    candidates$annotation_layer != "local_spectral_optional",
+    candidates$annotation_layer != "public_ms2",
     candidates$Level,
     -candidates$Total.score,
     candidates$adduct_priority,
@@ -1808,6 +1963,7 @@ metminer_object_review_rows <- function(object, mode = c("positive", "negative")
   }
   if (nrow(top) == 0) {
     top <- metminer_standardize_review_annotation_cols(data.frame(variable_id = variable_info$variable_id, stringsAsFactors = FALSE))
+    top <- metminer_add_annotation_layer_columns(top, mode, adduct_advice)
     top$adduct_priority <- NA_integer_
     top$mode <- mode
     top$annotation_rank <- NA_integer_
@@ -1853,6 +2009,11 @@ metminer_object_review_rows <- function(object, mode = c("positive", "negative")
     Total.score = suppressWarnings(as.numeric(merged$Total.score)),
     Database = merged$Database,
     Level = suppressWarnings(as.integer(merged$Level)),
+    annotation_layer = merged$annotation_layer,
+    evidence_scope = merged$evidence_scope,
+    core_adduct_match = merged$core_adduct_match,
+    strict_genome_adduct_pass = merged$strict_genome_adduct_pass,
+    metminer_confidence_level = merged$metminer_confidence_level,
     Sub_net_id = merged$sub_network,
     coelution_type = ifelse(has_text(merged$annotation_interpretation), merged$annotation_interpretation, merged$network_role),
     Represent_feature = ifelse(has_text(merged$parent_feature_id), merged$parent_feature_id, merged$variable_id),
@@ -1877,7 +2038,9 @@ metminer_collapse_annotation_review_table <- function(expand_table) {
     c(
       "Variable_id", "mz", "rt", "ms2_spectrum_id", "Compound.name",
       "KEGG.ID", "PlantCyc.ID", "Lab.ID", "Adduct", "mz.error", "mz.match.score",
-      "Total.score", "Database", "Level", "Sub_net_id",
+      "Total.score", "Database", "Level", "annotation_layer", "evidence_scope",
+      "core_adduct_match", "strict_genome_adduct_pass", "metminer_confidence_level",
+      "Sub_net_id",
       "Represent_feature", "adduct_priority", "annotation_rank"
     )
   )
@@ -1906,7 +2069,9 @@ metminer_collapse_annotation_review_table <- function(expand_table) {
   out <- x[idx, c(
     "Variable_id", "mz", "rt", "ms2_spectrum_id", "Compound.name",
     "KEGG.ID", "PlantCyc.ID", "Lab.ID", "Adduct", "mz.error", "mz.match.score",
-    "Total.score", "Database", "Level", "Sub_net_id"
+    "Total.score", "Database", "Level", "annotation_layer", "evidence_scope",
+    "core_adduct_match", "strict_genome_adduct_pass", "metminer_confidence_level",
+    "Sub_net_id"
   ), drop = FALSE]
   rownames(out) <- NULL
   out
@@ -1926,7 +2091,9 @@ metminer_build_annotation_review_tables <- function(positive_object = NULL, nega
   expand_cols <- c(
     "Variable_id", "mz", "rt", "ms2_spectrum_id", "Compound.name",
     "KEGG.ID", "PlantCyc.ID", "Lab.ID", "Adduct", "mz.error", "mz.match.score",
-    "Total.score", "Database", "Level", "Sub_net_id",
+    "Total.score", "Database", "Level", "annotation_layer", "evidence_scope",
+    "core_adduct_match", "strict_genome_adduct_pass", "metminer_confidence_level",
+    "Sub_net_id",
     "coelution_type", "Represent_feature", "mode", "annotation_rank", "adduct_priority"
   )
   expand <- metminer_ensure_columns(expand, expand_cols)

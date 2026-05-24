@@ -103,6 +103,25 @@ mod_annotation_filter_server <- function(id, global_data, prj_init) {
     update_progress_modal <- progress_handlers$update_progress_modal
     close_progress_modal <- progress_handlers$close_progress_modal
 
+    observe({
+      global_data$annotation_filter_advisor_state <- list(
+        available = TRUE,
+        use_network_validation = isTRUE(input$use_network),
+        cross_rt_tolerance = input$cross_rt_tol %||% NA_real_,
+        min_high_conf_level = input$high_conf_level %||% NA_integer_,
+        drop_recurrent_background = isTRUE(input$drop_recurrent_background),
+        top_n = input$top_n %||% NA_integer_,
+        advice_file_name = input$advice_file$name %||% NA_character_,
+        id_mapping_file_name = input$id_mapping_file$name %||% NA_character_,
+        input_objects = list(
+          positive_available = !is.null(global_data$object_pos_annotated),
+          negative_available = !is.null(global_data$object_neg_annotated)
+        ),
+        result_available = !is.null(global_data$annotation_filter_result),
+        updated_at = as.character(Sys.time())
+      )
+    })
+
     observeEvent(input$run_filter, {
       pos <- global_data$object_pos_annotated
       neg <- global_data$object_neg_annotated
@@ -133,7 +152,8 @@ mod_annotation_filter_server <- function(id, global_data, prj_init) {
           rt_tolerance = input$cross_rt_tol,
           min_high_conf_level = input$high_conf_level,
           use_network_validation = input$use_network,
-          drop_suspected_recurrent_background = input$drop_recurrent_background
+          drop_suspected_recurrent_background = input$drop_recurrent_background,
+          adduct_advice = adduct_advice
         )
 
         update_progress_modal(85, "Building expand/collapse review tables...")
@@ -182,6 +202,9 @@ mod_annotation_filter_server <- function(id, global_data, prj_init) {
         "Collapse review rows: ", nrow(collapse), "\n",
         "Final records: ", nrow(final), "\n",
         "Audit records: ", nrow(audit), "\n",
+        "Layer 1 genome/reaction records: ", sum(final$annotation_layer == "genome_reaction", na.rm = TRUE), "\n",
+        "Layer 2 public MS2 records: ", sum(final$annotation_layer == "public_ms2", na.rm = TRUE), "\n",
+        "Optional local/custom spectral records: ", sum(final$annotation_layer == "local_spectral_optional", na.rm = TRUE), "\n",
         "Network records: ", sum(final$record_type == "sub_network", na.rm = TRUE), "\n",
         "Merged-compound records: ", sum(final$record_type == "merged_compound", na.rm = TRUE), "\n",
         "Single-feature records: ", sum(final$record_type == "single_feature", na.rm = TRUE), "\n",
@@ -210,8 +233,10 @@ mod_annotation_filter_server <- function(id, global_data, prj_init) {
         tags$ol(
           class = "mb-2 ps-3",
           tags$li(tags$b("Candidate ranking: "), "for each feature, keep the top ", input$top_n,
-                  " annotations ranked by Level, Total.score, then LC-MS adduct priority."),
-          tags$li(tags$b("Adduct priority: "), "core adducts are preferred over optional adducts; the priority can be replaced by an uploaded LC-MS advice file."),
+                  " annotations ranked by evidence layer, Level, Total.score, then LC-MS adduct priority."),
+          tags$li(tags$b("Layer 1: "), "KEGG/PlantCyc genome/reaction candidates are retained only when they pass the strict core-adduct rule."),
+          tags$li(tags$b("Layer 2: "), "public MS2 libraries are default spectral evidence; local/custom standard libraries are optional enhancement inputs, not required."),
+          tags$li(tags$b("Adduct priority: "), "core adducts define strict Layer 1 acceptance; optional adducts may still support Layer 2 spectral candidates."),
           tags$li(tags$b("Expand review: "), "keeps candidate annotations together with feature-network roles, so isotope/adduct/ISF relationships can be checked manually."),
           tags$li(tags$b("Collapse review: "), "keeps one representative feature per sub-network, including unannotated parent-like features when network evidence supports them."),
           tags$li(tags$b("Recurrent/background ion flag: "), "unresolved recurrent ions, especially low-m/z ions that repeatedly appear across RT without a resolved parent, are marked as suspected background/interference candidates."),

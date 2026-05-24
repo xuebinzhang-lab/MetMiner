@@ -241,6 +241,38 @@ mod_data_rm_noise_server <- function(id, global_data, prj_init) {
       neg_count = NULL
     )
 
+    observe({
+      global_data$noise_filter_advisor_state <- list(
+        available = TRUE,
+        group_samples_by = input$noise_tag %||% NA_character_,
+        qc_missing_ratio_threshold = input$qc_na_freq %||% NA_real_,
+        group_missing_ratio_threshold = input$s_na_freq %||% NA_real_,
+        use_qc_rsd_filter = isTRUE(input$rm_noise_rsd),
+        qc_rsd_cutoff = input$qc_rsd %||% NA_real_,
+        use_blank_ratio_filter = isTRUE(input$rm_blank_ratio),
+        blank_label = input$blank_label %||% NA_character_,
+        sample_label = input$sample_label %||% NA_character_,
+        blank_ratio_cutoff = input$blank_ratio %||% NA_real_,
+        use_blank_informed_intensity_masking = isTRUE(input$rm_intensity),
+        intensity_method = input$intensity_method %||% NA_character_,
+        blank_sd_multiplier = input$blank_sd_mult %||% NA_real_,
+        percentile_fallback = input$pct_fallback %||% NA_real_,
+        removed_feature_counts = list(
+          positive = noise_info$pos_count %||% NA_integer_,
+          negative = noise_info$neg_count %||% NA_integer_
+        ),
+        input_objects = list(
+          positive_available = !is.null(get_init_obj("positive")),
+          negative_available = !is.null(get_init_obj("negative"))
+        ),
+        output_objects = list(
+          positive_available = !is.null(global_data$object_pos_clean),
+          negative_available = !is.null(global_data$object_neg_clean)
+        ),
+        updated_at = as.character(Sys.time())
+      )
+    })
+
     # --- 2. Update UI (Choices) ---
     observe({
       obj <- get_init_obj("positive")

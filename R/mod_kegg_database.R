@@ -89,7 +89,7 @@ mod_kegg_database_ui <- function(id) {
             tags$h6(class = "fw-bold text-primary", "AI review curation"),
             tags$small(
               class = "text-muted d-block mb-3",
-              "Upload one or more model review JSON files. Only pathways present in the JSON files are shown for manual curation."
+              "Download the review prompt and run it in online chat tools, external scripts, or multiple LLMs. Then upload one or more JSON review files for voting and manual curation. MetMiner Bot can also generate the JSON with the current bot settings."
             ),
             fileInput(
               ns("ai_review_json"),
@@ -191,7 +191,8 @@ mod_kegg_database_ui <- function(id) {
               class = "d-flex justify-content-between align-items-center mb-3",
               h3("KEGG Pathway AI Review Curation", class = "text-primary fw-bold m-0"),
               div(
-                downloadButton(ns("download_curated_pathway"), "Curated Pathway .rda", class = "btn-outline-success")
+                downloadButton(ns("download_curation_xlsx"), "Curation .xlsx", class = "btn-outline-success"),
+                downloadButton(ns("download_curated_pathway"), "Curated Pathway .rda", class = "btn-outline-success ms-2")
               )
             ),
             bslib::layout_columns(
@@ -227,7 +228,7 @@ mod_kegg_database_ui <- function(id) {
 #'
 #' @param id Module id.
 #' @noRd
-mod_kegg_database_server <- function(id) {
+mod_kegg_database_server <- function(id, global_data = NULL) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     progress_handlers <- create_progress_handlers(ns)
@@ -256,6 +257,95 @@ mod_kegg_database_server <- function(id) {
         state$status <- paste0("Loaded ", nrow(organisms), " KEGG green plant organisms.")
       }, error = function(e) {
         state$status <- paste("Failed to load KEGG organism list:", e$message)
+        showNotification(e$message, type = "error", duration = 8)
+      })
+    }
+
+    set_kegg_result <- function(result, status_prefix = "Completed.") {
+      state$result <- result
+      if (!is.null(global_data)) {
+        global_data$kegg_database_result <- result
+      }
+      state$ai_review <- NULL
+      state$curation <- NULL
+      state$curated_pathway <- NULL
+      state$active_pathway <- NULL
+      state$ai_review_files <- 0L
+      state$review_status_text <- "No AI review JSON loaded."
+      state$status <- paste0(
+        status_prefix, "\n",
+        "Output folder: ", result$output_dir, "\n",
+        "Organism: ", result$organism_name %||% input$organism_name, " (", result$organism_code %||% input$organism_code, ")\n",
+        "Compounds: ", nrow(result$clean_compounds %||% data.frame()), "\n",
+        "MS2 compounds: ", nrow(result$ms2_database@spectra.info), "\n",
+        "Pathways: ", if (!is.null(result$pathway_database)) length(result$pathway_database@pathway_id) else NA_integer_, "\n",
+        "Pathways flagged for review: ", if ("review_flag" %in% colnames(result$pathway_qc %||% data.frame())) sum(result$pathway_qc$review_flag, na.rm = TRUE) else 0L, "\n",
+        "Supported reactions: ", if ("reaction_id" %in% colnames(result$pathway_reaction_map %||% data.frame())) length(unique(result$pathway_reaction_map$reaction_id)) else 0L, "\n",
+        "Ready for download."
+      )
+    }
+
+    observe({
+      if (is.null(global_data)) return()
+      global_data$database_advisor_state <- modifyList(global_data$database_advisor_state %||% list(), list(
+        available = TRUE,
+        kegg = list(
+          organism_code = input$organism_code %||% NA_character_,
+          organism_name = input$organism_name %||% NA_character_,
+          output_dir = input$output_dir %||% NA_character_,
+          min_mw = input$min_mw %||% NA_real_,
+          max_mw = input$max_mw %||% NA_real_,
+          review_min_reaction_coverage = input$review_min_coverage %||% NA_real_,
+          review_min_supported_reactions = input$review_min_reactions %||% NA_integer_,
+          review_min_pathway_specific_compounds = input$review_min_specific_compounds %||% NA_integer_,
+          review_hub_compound_frequency_cutoff = input$review_hub_cutoff %||% NA_real_,
+          review_prompt_max_pathways = input$review_prompt_max %||% NA_integer_,
+          result_available = !is.null(state$result),
+          status = state$status
+        ),
+        updated_at = as.character(Sys.time())
+      ))
+    })
+
+    build_kegg_result <- function(output_dir) {
+      update_progress_modal(15, "Fetching KEGG gene, KO, EC, reaction, and pathway links...")
+      result <- metminer_build_kegg_organism_database(
+        organism_code = input$organism_code,
+        organism_name = input$organism_name,
+        output_dir = output_dir,
+        min_mw = input$min_mw,
+        max_mw = input$max_mw,
+        sleep_sec = input$sleep_sec,
+        review_min_reaction_coverage = input$review_min_coverage,
+        review_min_supported_reactions = input$review_min_reactions,
+        review_min_pathway_specific_compounds = input$review_min_specific_compounds,
+        review_hub_compound_frequency_cutoff = input$review_hub_cutoff,
+        review_prompt_max_pathways = input$review_prompt_max,
+        version = as.character(Sys.Date())
+      )
+      update_progress_modal(100, "Done.")
+      set_kegg_result(result, "Completed.")
+      showNotification("KEGG databases constructed successfully.", type = "message")
+    }
+
+    load_existing_kegg_result <- function(output_dir) {
+      show_progress_modal("KEGG Database", "Loading existing KEGG database from target folder...", 10)
+      shinyjs::disable("run")
+      on.exit({
+        shinyjs::enable("run")
+        close_progress_modal()
+      }, add = TRUE)
+      tryCatch({
+        result <- metminer_load_kegg_organism_database_result(
+          output_dir = output_dir,
+          organism_code = input$organism_code,
+          organism_name = input$organism_name
+        )
+        update_progress_modal(100, "Loaded existing database.")
+        set_kegg_result(result, "Loaded existing KEGG database.")
+        showNotification("Existing KEGG database loaded. No files were overwritten.", type = "message")
+      }, error = function(e) {
+        state$status <- paste("Failed to load existing KEGG database:", e$message)
         showNotification(e$message, type = "error", duration = 8)
       })
     }
@@ -301,6 +391,27 @@ mod_kegg_database_server <- function(id) {
     output$review_status <- renderText({
       state$review_status_text
     })
+    kegg_pathway_link <- function(pathway_id) {
+      paste0("https://www.kegg.jp/kegg-bin/show_pathway?", pathway_id)
+    }
+    export_review_table <- function(x) {
+      x <- as.data.frame(x %||% data.frame(), stringsAsFactors = FALSE)
+      if (nrow(x) == 0) return(x)
+      if ("pathway_id" %in% colnames(x) && !"kegg_pathway_url" %in% colnames(x)) {
+        x$kegg_pathway_url <- kegg_pathway_link(x$pathway_id)
+      }
+      x <- x[, setdiff(colnames(x), "ai_detail_html"), drop = FALSE]
+      if (requireNamespace("jsonlite", quietly = TRUE)) {
+        for (col in colnames(x)) {
+          if (is.list(x[[col]])) {
+            x[[col]] <- vapply(x[[col]], function(value) {
+              jsonlite::toJSON(value, auto_unbox = TRUE, na = "null")
+            }, character(1))
+          }
+        }
+      }
+      x
+    }
     lapply(
       c("value_ai_files", "value_ai_pathways", "value_ai_keep", "value_ai_remove", "review_status"),
       function(id) outputOptions(output, id, suspendWhenHidden = FALSE)
@@ -343,6 +454,7 @@ mod_kegg_database_server <- function(id) {
           tags$td(i),
           tags$td(table$pathway_id[i]),
           tags$td(table$pathway_name[i]),
+          tags$td(tags$a("KEGG map", href = kegg_pathway_link(table$pathway_id[i]), target = "_blank")),
           tags$td(
             tags$a(
               href = "#",
@@ -366,6 +478,7 @@ mod_kegg_database_server <- function(id) {
               tags$th("#"),
               tags$th("Pathway ID"),
               tags$th("Pathway Name"),
+              tags$th("KEGG Map"),
               tags$th("AI review result"),
               tags$th("Status")
             )
@@ -401,6 +514,41 @@ mod_kegg_database_server <- function(id) {
         output_dir <- file.path(getwd(), output_dir)
       }
 
+      existing <- metminer_kegg_existing_database_files(output_dir, input$organism_code)
+      if (isTRUE(existing$exists)) {
+        shinyalert::shinyalert(
+          title = "Existing KEGG Database Detected",
+          text = paste0(
+            "The target folder already contains a complete KEGG database for ",
+            input$organism_name, " (", input$organism_code, ").\n\n",
+            "Choose Yes to overwrite and rebuild it. Choose No to load the existing database without overwriting files."
+          ),
+          type = "warning",
+          showCancelButton = TRUE,
+          confirmButtonText = "Yes, overwrite",
+          cancelButtonText = "No, load existing",
+          callbackR = function(x) {
+            if (isTRUE(x)) {
+              show_progress_modal("KEGG Database", "Preparing KEGG organism database construction...", 5)
+              shinyjs::disable("run")
+              on.exit({
+                shinyjs::enable("run")
+                close_progress_modal()
+              }, add = TRUE)
+              tryCatch({
+                build_kegg_result(output_dir)
+              }, error = function(e) {
+                state$status <- paste("Failed:", e$message)
+                showNotification(e$message, type = "error", duration = 8)
+              })
+            } else {
+              load_existing_kegg_result(output_dir)
+            }
+          }
+        )
+        return()
+      }
+
       show_progress_modal("KEGG Database", "Preparing KEGG organism database construction...", 5)
       shinyjs::disable("run")
       on.exit({
@@ -409,46 +557,81 @@ mod_kegg_database_server <- function(id) {
       }, add = TRUE)
 
       tryCatch({
-        update_progress_modal(15, "Fetching KEGG gene, KO, EC, reaction, and pathway links...")
-        result <- metminer_build_kegg_organism_database(
-          organism_code = input$organism_code,
-          organism_name = input$organism_name,
-          output_dir = output_dir,
-          min_mw = input$min_mw,
-          max_mw = input$max_mw,
-          sleep_sec = input$sleep_sec,
-          review_min_reaction_coverage = input$review_min_coverage,
-          review_min_supported_reactions = input$review_min_reactions,
-          review_min_pathway_specific_compounds = input$review_min_specific_compounds,
-          review_hub_compound_frequency_cutoff = input$review_hub_cutoff,
-          review_prompt_max_pathways = input$review_prompt_max,
-          version = as.character(Sys.Date())
-        )
-        update_progress_modal(100, "Done.")
-        state$result <- result
-        state$ai_review <- NULL
-        state$curation <- NULL
-        state$curated_pathway <- NULL
-        state$active_pathway <- NULL
-        state$ai_review_files <- 0L
-        state$review_status_text <- "No AI review JSON loaded."
-        state$status <- paste0(
-          "Completed.\n",
-          "Output folder: ", output_dir, "\n",
-          "Organism: ", input$organism_name, " (", input$organism_code, ")\n",
-          "Compounds: ", nrow(result$clean_compounds), "\n",
-          "MS2 compounds: ", nrow(result$ms2_database@spectra.info), "\n",
-          "Pathways: ", length(result$pathway_database@pathway_id), "\n",
-          "Pathways flagged for review: ", sum(result$pathway_qc$review_flag, na.rm = TRUE), "\n",
-          "Supported reactions: ", length(unique(result$pathway_reaction_map$reaction_id)), "\n",
-          "Ready for download."
-        )
-        showNotification("KEGG databases constructed successfully.", type = "message")
+        build_kegg_result(output_dir)
       }, error = function(e) {
         state$status <- paste("Failed:", e$message)
         showNotification(e$message, type = "error", duration = 8)
       })
     })
+
+    apply_ai_review_result <- function(ai_review, ai_review_files = 1L, source_label = "AI review") {
+      pathway_qc <- if (!is.null(state$result) && "pathway_qc" %in% names(state$result)) state$result$pathway_qc else NULL
+      curation <- metminer_kegg_prepare_multi_review_curation(pathway_qc, ai_review)
+      curation$final_status <- curation$consensus_decision
+      state$ai_review <- ai_review
+      state$curation <- curation
+      if (!is.null(global_data)) {
+        global_data$kegg_ai_review <- ai_review
+        global_data$kegg_ai_review_curation <- curation
+      }
+      state$curated_pathway <- NULL
+      state$ai_review_files <- ai_review_files
+      state$review_status_text <- paste0(
+        "AI review source: ", source_label, "\n",
+        "AI review files: ", state$ai_review_files, "\n",
+        "Model decisions: ", nrow(ai_review), "\n",
+        "Reviewed pathways: ", nrow(curation), "\n",
+        "Keep: ", sum(curation$final_status == "keep", na.rm = TRUE), "\n",
+        "Remove: ", sum(curation$final_status == "remove", na.rm = TRUE), "\n",
+        "Review/undecided: ", sum(curation$final_status == "review", na.rm = TRUE)
+      )
+      output_dir <- if (!is.null(state$result) && !is.null(state$result$output_dir)) {
+        state$result$output_dir
+      } else {
+        trimws(input$output_dir %||% "")
+      }
+      if (!nzchar(output_dir)) {
+        output_dir <- file.path("Temp", paste0("kegg_", input$organism_code %||% "organism", "_database"))
+      }
+      if (!grepl("^/", output_dir)) output_dir <- file.path(getwd(), output_dir)
+      if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+      if (requireNamespace("jsonlite", quietly = TRUE)) {
+        jsonlite::write_json(
+          ai_review,
+          file.path(output_dir, paste0("kegg_", input$organism_code %||% "organism", "_ai_review_merged.json")),
+          pretty = TRUE,
+          na = "null"
+        )
+        ai_review_export <- ai_review
+        for (col in colnames(ai_review_export)) {
+          if (is.list(ai_review_export[[col]])) {
+            ai_review_export[[col]] <- vapply(
+              ai_review_export[[col]],
+              function(x) jsonlite::toJSON(x, auto_unbox = TRUE, na = "null"),
+              character(1)
+            )
+          }
+        }
+        utils::write.table(
+          ai_review_export,
+          file.path(output_dir, paste0("kegg_", input$organism_code %||% "organism", "_ai_review_merged.tsv")),
+          sep = "\t", quote = FALSE, row.names = FALSE, na = ""
+        )
+        curation_json <- curation[, setdiff(colnames(curation), "ai_detail_html"), drop = FALSE]
+        jsonlite::write_json(
+          curation_json,
+          file.path(output_dir, paste0("kegg_", input$organism_code %||% "organism", "_ai_review_merged_summary.json")),
+          pretty = TRUE,
+          na = "null"
+        )
+      }
+      state$status <- paste0(
+        state$status,
+        "\n", source_label, ": ", nrow(ai_review), " pathway decisions.\n",
+        "Default retained pathways after model voting: ", sum(curation$final_status == "keep", na.rm = TRUE), "."
+      )
+      invisible(curation)
+    }
 
     observeEvent(input$load_ai_review, {
       req(input$ai_review_json)
@@ -459,67 +642,7 @@ mod_kegg_database_server <- function(id) {
           review
         })
         ai_review <- do.call(rbind, review_list)
-        pathway_qc <- if (!is.null(state$result) && "pathway_qc" %in% names(state$result)) state$result$pathway_qc else NULL
-        curation <- metminer_kegg_prepare_multi_review_curation(pathway_qc, ai_review)
-        curation$final_status <- curation$consensus_decision
-        state$ai_review <- ai_review
-        state$curation <- curation
-        state$curated_pathway <- NULL
-        state$ai_review_files <- nrow(input$ai_review_json)
-        state$review_status_text <- paste0(
-          "AI review files: ", state$ai_review_files, "\n",
-          "Model decisions: ", nrow(ai_review), "\n",
-          "Reviewed pathways: ", nrow(curation), "\n",
-          "Keep: ", sum(curation$final_status == "keep", na.rm = TRUE), "\n",
-          "Remove: ", sum(curation$final_status == "remove", na.rm = TRUE), "\n",
-          "Review/undecided: ", sum(curation$final_status == "review", na.rm = TRUE)
-        )
-        output_dir <- if (!is.null(state$result) && !is.null(state$result$output_dir)) {
-          state$result$output_dir
-        } else {
-          trimws(input$output_dir %||% "")
-        }
-        if (!nzchar(output_dir)) {
-          output_dir <- file.path("Temp", paste0("kegg_", input$organism_code %||% "organism", "_database"))
-        }
-        if (!grepl("^/", output_dir)) output_dir <- file.path(getwd(), output_dir)
-        if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
-        if (requireNamespace("jsonlite", quietly = TRUE)) {
-          jsonlite::write_json(
-            ai_review,
-            file.path(output_dir, paste0("kegg_", input$organism_code %||% "organism", "_ai_review_merged.json")),
-            pretty = TRUE,
-            na = "null"
-          )
-          ai_review_export <- ai_review
-          for (col in colnames(ai_review_export)) {
-            if (is.list(ai_review_export[[col]])) {
-              ai_review_export[[col]] <- vapply(
-                ai_review_export[[col]],
-                function(x) jsonlite::toJSON(x, auto_unbox = TRUE, na = "null"),
-                character(1)
-              )
-            }
-          }
-          utils::write.table(
-            ai_review_export,
-            file.path(output_dir, paste0("kegg_", input$organism_code %||% "organism", "_ai_review_merged.tsv")),
-            sep = "\t", quote = FALSE, row.names = FALSE, na = ""
-          )
-          curation_json <- curation[, setdiff(colnames(curation), "ai_detail_html"), drop = FALSE]
-          jsonlite::write_json(
-            curation_json,
-            file.path(output_dir, paste0("kegg_", input$organism_code %||% "organism", "_ai_review_merged_summary.json")),
-            pretty = TRUE,
-            na = "null"
-          )
-        }
-        state$status <- paste0(
-          state$status,
-          "\nAI review loaded: ", nrow(input$ai_review_json), " file(s), ",
-          nrow(ai_review), " pathway decisions.\n",
-          "Default retained pathways after model voting: ", sum(curation$final_status == "keep", na.rm = TRUE), "."
-        )
+        apply_ai_review_result(ai_review, ai_review_files = nrow(input$ai_review_json), source_label = "Uploaded AI review")
         showNotification("AI review JSON files loaded. Click pathway rows to curate.", type = "message")
       }, error = function(e) {
         state$review_status_text <- paste("Failed to load AI review JSON:", e$message)
@@ -540,6 +663,7 @@ mod_kegg_database_server <- function(id) {
         easyClose = TRUE,
         div(
           class = "mb-3",
+          tags$p(tags$a("Open KEGG pathway map", href = kegg_pathway_link(pathway_id), target = "_blank")),
           tags$p(
             tags$b("Model voting: "),
             paste0("keep=", row$keep_n[1], ", remove=", row$remove_n[1], ", review=", row$review_n[1],
@@ -554,6 +678,7 @@ mod_kegg_database_server <- function(id) {
         ),
         HTML(metminer_kegg_ai_detail_html(ai_rows)),
         footer = tagList(
+          downloadButton(ns("download_active_pathway_review"), "Download table", class = "btn-outline-primary"),
           actionButton(ns("review_keep"), "Keep", icon = icon("check"), class = "btn-success"),
           actionButton(ns("review_remove"), "Remove", icon = icon("xmark"), class = "btn-danger"),
           modalButton("Close")
@@ -651,6 +776,40 @@ mod_kegg_database_server <- function(id) {
         req(state$result, state$curated_pathway)
         file.copy(file.path(state$result$output_dir, state$curated_pathway$file_name), file, overwrite = TRUE)
       }
+    )
+    output$download_curation_xlsx <- downloadHandler(
+      filename = function() paste0("kegg_", input$organism_code %||% "organism", "_ai_review_curation.xlsx"),
+      content = function(file) {
+        req(state$curation)
+        if (!requireNamespace("writexl", quietly = TRUE)) {
+          stop("Package 'writexl' is required to export Excel workbooks.", call. = FALSE)
+        }
+        writexl::write_xlsx(
+          list(Curation = export_review_table(state$curation)),
+          path = file
+        )
+      },
+      contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    output$download_active_pathway_review <- downloadHandler(
+      filename = function() paste0(state$active_pathway %||% "kegg_pathway", "_ai_review_detail.xlsx"),
+      content = function(file) {
+        req(state$active_pathway, state$ai_review)
+        if (!requireNamespace("writexl", quietly = TRUE)) {
+          stop("Package 'writexl' is required to export Excel workbooks.", call. = FALSE)
+        }
+        pathway_id <- state$active_pathway
+        ai_rows <- state$ai_review[state$ai_review$pathway_id == pathway_id, , drop = FALSE]
+        curation_row <- state$curation[state$curation$pathway_id == pathway_id, , drop = FALSE]
+        writexl::write_xlsx(
+          list(
+            Review_detail = export_review_table(ai_rows),
+            Curation_summary = export_review_table(curation_row)
+          ),
+          path = file
+        )
+      },
+      contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     output$download_ms2 <- downloadHandler(
       filename = function() paste0("kegg_", input$organism_code %||% "organism", "_ms2.rda"),

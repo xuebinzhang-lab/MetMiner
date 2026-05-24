@@ -1,7 +1,9 @@
 #' Internal: Setup files and parallel plan for paramounter
 #'
 #' @param directory The data path for mzXML files.
-#' @param filenum Number of files to use (3, 5, or "all").
+#' @param filenum Number of mzXML files to use (3, 5, or "all"). Numeric
+#'   choices are sampled evenly across the file list rather than taking only
+#'   the first files.
 #' @param thread Number of threads for parallel processing.
 #' @return A list with `files` (character vector of selected file paths) and
 #'   `n_chunks` (integer for chunking).
@@ -43,11 +45,16 @@
 #' Fixed for parallel processing environment isolation.
 #'
 #' @param directory The data path for mzXML files.
-#' @param massSDrange The range of standard deviations for mass differences, default 2.
-#' @param smooth Chromatographic smoothness level (default 0).
-#' @param cutoff The ppm percentage for cutoff (default 0.95).
+#' @param massSDrange Numeric scalar. Multiplier applied to the within-peak m/z
+#'   standard deviation when estimating mass tolerance in ppm; default 2.
+#' @param smooth Numeric smoothing window level for the internal EIC smoother;
+#'   0 disables smoothing (default 0).
+#' @param cutoff Quantile of peak-level ppm estimates used as the suggested
+#'   ppm cutoff (default 0.95).
 #' @param thread Number of threads for parallel processing.
-#' @param filenum Number of files to use (3, 5, or "all").
+#' @param filenum Number of mzXML files to use (3, 5, or "all"). Numeric
+#'   choices are sampled evenly across the file list rather than taking only
+#'   the first files.
 #'
 #' @importFrom future plan multisession multicore
 #' @importFrom furrr future_map_dfr furrr_options
@@ -212,6 +219,10 @@ paramounter_part1 <- function(directory, massSDrange = 2, smooth = 0, cutoff = 0
 #' Fixed for parallel processing environment isolation.
 #'
 #' @inheritParams paramounter_part1
+#' @param massSDrange Retained for backward compatibility; currently not used
+#'   by part 2.
+#' @param cutoff Retained for backward compatibility; currently not used by
+#'   part 2.
 #' @param ppmCut The PPM cutoff calculated from part 1.
 #' @export
 paramounter_part2 <- function(directory, massSDrange = 2, smooth = 0, cutoff = 0.95,

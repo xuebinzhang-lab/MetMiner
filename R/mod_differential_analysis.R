@@ -15,7 +15,13 @@ mod_differential_analysis_ui <- function(id) {
         width = 390,
         bg = "#f8f9fa",
         tags$h6(class = "fw-bold text-primary", "1. Data and groups"),
-        radioButtons(ns("mode"), "Ion mode", choices = c("Positive" = "positive", "Negative" = "negative"), selected = "positive", inline = TRUE),
+        radioButtons(
+          ns("mode"),
+          "Ion mode",
+          choices = c("Positive + Negative" = "merged", "Positive" = "positive", "Negative" = "negative"),
+          selected = "merged",
+          inline = TRUE
+        ),
         uiOutput(ns("group_controls")),
         tags$hr(),
         tags$h6(class = "fw-bold text-primary", "2. DAM statistics"),
@@ -27,6 +33,7 @@ mod_differential_analysis_ui <- function(id) {
         checkboxInput(ns("use_fdr"), "Use FDR for significance", value = TRUE),
         tags$hr(),
         checkboxInput(ns("interactive_volcano"), "Interactive volcano", value = TRUE),
+        checkboxInput(ns("volcano_annotated_only"), "Show annotated points only in volcano", value = FALSE),
         checkboxInput(ns("run_opls"), "Run lightweight OPLS-DA when available", value = FALSE),
         conditionalPanel(
           condition = sprintf("input['%s'] == true", ns("run_opls")),
@@ -57,7 +64,18 @@ mod_differential_analysis_ui <- function(id) {
             ),
             bslib::nav_panel(
               "Volcano",
-              uiOutput(ns("volcano_ui"))
+              bslib::layout_columns(
+                col_widths = c(6, 6),
+                bslib::card(full_screen = TRUE, bslib::card_header("Volcano"), uiOutput(ns("volcano_ui"))),
+                bslib::card(bslib::card_header("Group Difference"), plotOutput(ns("boxplot"), height = "320px"))
+              ),
+              br(),
+              bslib::layout_columns(
+                col_widths = c(4, 4, 4),
+                bslib::card(bslib::card_header("Selected Feature"), DT::dataTableOutput(ns("tbl_feature_annotation"))),
+                bslib::card(bslib::card_header("EIC"), plotly::plotlyOutput(ns("eic_plot"), height = "360px")),
+                bslib::card(bslib::card_header("MS2 Spectrum"), plotly::plotlyOutput(ns("ms2_plot"), height = "360px"))
+              )
             ),
             bslib::nav_panel(
               "OPLS-DA",
@@ -66,20 +84,6 @@ mod_differential_analysis_ui <- function(id) {
               plotly::plotlyOutput(ns("opls_plot"), height = "520px"),
               br(),
               DT::dataTableOutput(ns("tbl_opls_summary"))
-            ),
-            bslib::nav_panel(
-              "Selected Feature",
-              bslib::layout_columns(
-                col_widths = c(6, 6),
-                bslib::card(bslib::card_header("Annotation"), DT::dataTableOutput(ns("tbl_feature_annotation"))),
-                bslib::card(bslib::card_header("Group Difference"), plotOutput(ns("boxplot"), height = "320px"))
-              ),
-              br(),
-              bslib::layout_columns(
-                col_widths = c(6, 6),
-                bslib::card(bslib::card_header("EIC"), plotly::plotlyOutput(ns("eic_plot"), height = "360px")),
-                bslib::card(bslib::card_header("MS2 Spectrum"), plotly::plotlyOutput(ns("ms2_plot"), height = "360px"))
-              )
             )
           )
         )
@@ -101,6 +105,42 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
 
     current_object <- reactive({
       metminer_analysis_object(global_data, input$mode %||% "positive")
+    })
+
+    current_polarity_objects <- reactive({
+      list(
+        positive = metminer_analysis_object(global_data, "positive"),
+        negative = metminer_analysis_object(global_data, "negative")
+      )
+    })
+
+    observe({
+      cmp <- tryCatch(metminer_parse_comparison(input$comparison_pair %||% ""), error = function(e) list(control_group = NA_character_, case_group = NA_character_))
+      res <- state$result$result %||% data.frame()
+      global_data$differential_advisor_state <- list(
+        available = TRUE,
+        mode = input$mode %||% "positive",
+        group_column = input$group_column %||% NA_character_,
+        comparison_pair = input$comparison_pair %||% NA_character_,
+        control_group = cmp$control_group %||% NA_character_,
+        case_group = cmp$case_group %||% NA_character_,
+        mean_median = input$mean_median %||% NA_character_,
+        test_method = input$test_method %||% NA_character_,
+        p_adjust_method = input$p_adjust %||% NA_character_,
+        fc_cutoff = input$fc_cutoff %||% NA_real_,
+        p_cutoff = input$p_cutoff %||% NA_real_,
+        use_fdr = isTRUE(input$use_fdr),
+        run_opls = isTRUE(input$run_opls),
+        opls_scale = isTRUE(input$opls_scale),
+        volcano_annotated_only = isTRUE(input$volcano_annotated_only),
+        selected_feature = state$selected_feature %||% NA_character_,
+        result_rows = nrow(res),
+        up = if ("change" %in% colnames(res)) sum(res$change == "Up", na.rm = TRUE) else NA_integer_,
+        down = if ("change" %in% colnames(res)) sum(res$change == "Down", na.rm = TRUE) else NA_integer_,
+        status = state$status,
+        opls_status = state$opls_status,
+        updated_at = as.character(Sys.time())
+      )
     })
 
     output$group_controls <- renderUI({
@@ -181,7 +221,7 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
         }
         state$status <- paste0(
           "Comparison: ", cmp$case_group, " vs ", cmp$control_group, "\n",
-          "Mode: ", input$mode, "\n",
+          "Mode: ", if (identical(input$mode, "merged")) "positive + negative" else input$mode, "\n",
           "Control samples: ", length(res$control_ids), "\n",
           "Case samples: ", length(res$case_ids), "\n",
           "Features tested: ", nrow(res$result), "\n",
@@ -236,19 +276,33 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
 
     output$volcano_ui <- renderUI({
       if (isTRUE(input$interactive_volcano)) {
-        plotly::plotlyOutput(ns("volcano_plotly"), height = "620px")
+        plotly::plotlyOutput(ns("volcano_plotly"), height = "320px")
       } else {
-        plotOutput(ns("volcano_static"), height = "620px")
+        plotOutput(ns("volcano_static"), height = "320px")
       }
     })
 
     output$volcano_plotly <- plotly::renderPlotly({
       req(state$result)
-      metminer_plot_volcano(state$result$result, input$fc_cutoff, input$p_cutoff, state$result$p_column, interactive = TRUE)
+      metminer_plot_volcano(
+        state$result$result,
+        input$fc_cutoff,
+        input$p_cutoff,
+        state$result$p_column,
+        interactive = TRUE,
+        annotated_only = isTRUE(input$volcano_annotated_only)
+      )
     })
     output$volcano_static <- renderPlot({
       req(state$result)
-      metminer_plot_volcano(state$result$result, input$fc_cutoff, input$p_cutoff, state$result$p_column, interactive = FALSE)
+      metminer_plot_volcano(
+        state$result$result,
+        input$fc_cutoff,
+        input$p_cutoff,
+        state$result$p_column,
+        interactive = FALSE,
+        annotated_only = isTRUE(input$volcano_annotated_only)
+      )
     })
 
     output$opls_plot <- plotly::renderPlotly({
@@ -289,26 +343,50 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
 
     output$eic_plot <- plotly::renderPlotly({
       req(state$object, state$selected_feature)
-      eic <- make_feature_eic_data(
-        wd = prj_init$wd,
-        object = state$object,
-        feature_id = state$selected_feature,
-        mode = input$mode,
-        max_traces = 8
-      )
+      objs <- current_polarity_objects()
+      eic <- if (identical(input$mode, "merged")) {
+        make_feature_eic_data(
+          wd = prj_init$wd,
+          positive_object = objs$positive,
+          negative_object = objs$negative,
+          feature_id = state$selected_feature,
+          max_traces = 8
+        )
+      } else {
+        make_feature_eic_data(
+          wd = prj_init$wd,
+          object = state$object,
+          feature_id = state$selected_feature,
+          mode = input$mode,
+          max_traces = 8
+        )
+      }
       plot_feature_eic(eic)
     })
 
     output$ms2_plot <- plotly::renderPlotly({
       req(state$object, state$selected_feature)
-      dat <- make_ms2_spectrum_data(
-        object = state$object,
-        feature_id = state$selected_feature,
-        mz_tol = 0.02,
-        ms2_mz_tol_ppm = 5,
-        ms2_rt_tol = 10,
-        top_n = 12
-      )
+      objs <- current_polarity_objects()
+      dat <- if (identical(input$mode, "merged")) {
+        make_ms2_spectrum_data(
+          positive_object = objs$positive,
+          negative_object = objs$negative,
+          feature_id = state$selected_feature,
+          mz_tol = 0.02,
+          ms2_mz_tol_ppm = 5,
+          ms2_rt_tol = 10,
+          top_n = 12
+        )
+      } else {
+        make_ms2_spectrum_data(
+          object = state$object,
+          feature_id = state$selected_feature,
+          mz_tol = 0.02,
+          ms2_mz_tol_ppm = 5,
+          ms2_rt_tol = 10,
+          top_n = 12
+        )
+      }
       plot_ms2_spectrum(dat)
     })
 

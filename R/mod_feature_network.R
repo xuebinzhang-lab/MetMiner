@@ -159,7 +159,14 @@ mod_feature_network_ui <- function(id) {
                 bslib::card(
                   height = "860px",
                   full_screen = TRUE,
-                  bslib::card_header(textOutput(ns("network_title"), inline = TRUE), class = "bg-light"),
+                  bslib::card_header(
+                    div(
+                      class = "d-flex align-items-center justify-content-between gap-2",
+                      textOutput(ns("network_title"), inline = TRUE),
+                      downloadButton(ns("download_network_plot"), "Download", class = "btn-sm btn-outline-secondary")
+                    ),
+                    class = "bg-light"
+                  ),
                   bslib::layout_sidebar(
                     sidebar = bslib::sidebar(
                       title = "Network Controls",
@@ -185,21 +192,42 @@ mod_feature_network_ui <- function(id) {
                   bslib::card(
                     height = "300px",
                     full_screen = TRUE,
-                    bslib::card_header("Sub-network MS1 Spectrum", class = "bg-light"),
+                    bslib::card_header(
+                      div(
+                        class = "d-flex align-items-center justify-content-between gap-2",
+                        "Sub-network MS1 Spectrum",
+                        downloadButton(ns("download_ms1_window_plot"), "Download", class = "btn-sm btn-outline-secondary")
+                      ),
+                      class = "bg-light"
+                    ),
                     tags$div(class = "px-2 pb-2 text-muted small", textOutput(ns("selected_node_text"))),
                     plotly::plotlyOutput(ns("ms1_window_plot"), height = "235px")
                   ),
                   bslib::card(
                     height = "300px",
                     full_screen = TRUE,
-                    bslib::card_header("Assigned MS2 Spectrum", class = "bg-light"),
+                    bslib::card_header(
+                      div(
+                        class = "d-flex align-items-center justify-content-between gap-2",
+                        "Assigned MS2 Spectrum",
+                        downloadButton(ns("download_ms2_spectrum_plot"), "Download", class = "btn-sm btn-outline-secondary")
+                      ),
+                      class = "bg-light"
+                    ),
                     tags$div(class = "px-2 pb-2 text-muted small", textOutput(ns("selected_ms2_text"))),
                     plotly::plotlyOutput(ns("ms2_spectrum_plot"), height = "235px")
                   ),
                   bslib::card(
                     height = "300px",
                     full_screen = TRUE,
-                    bslib::card_header("Raw XCMS Chromatogram", class = "bg-light"),
+                    bslib::card_header(
+                      div(
+                        class = "d-flex align-items-center justify-content-between gap-2",
+                        "Raw XCMS Chromatogram",
+                        downloadButton(ns("download_feature_eic_plot"), "Download", class = "btn-sm btn-outline-secondary")
+                      ),
+                      class = "bg-light"
+                    ),
                     tags$div(class = "px-2 pb-2 text-muted small", textOutput(ns("selected_eic_text"))),
                     plotly::plotlyOutput(ns("feature_eic_plot"), height = "235px")
                   )
@@ -249,6 +277,49 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
       }
       global_data$pseudo_area_neg
     }
+
+    observe({
+      global_data$feature_network_advisor_state <- list(
+        available = TRUE,
+        detect_types = input$detect_types %||% character(),
+        ion_mode = input$ion_mode %||% "auto",
+        ppm = input$ppm %||% NA_real_,
+        rt_tolerance_sec = input$rt_tolerance %||% NA_real_,
+        correlation_full_score_reference = input$cor_cutoff %||% NA_real_,
+        max_charge = input$max_charge %||% NA_integer_,
+        max_neutral_loss_charge = input$max_nl_charge %||% NA_integer_,
+        use_ms2 = isTRUE(input$use_ms2),
+        ms2 = list(
+          column = input$ms2_column %||% NA_character_,
+          attach_match_mz_tol = input$ms2_match_mz_tol %||% NA_real_,
+          attach_match_rt_tol = input$ms2_match_rt_tol %||% NA_real_,
+          audit_mz_tol_ppm = input$ms2_mz_tol_ppm %||% NA_real_,
+          audit_rt_tol = input$ms2_rt_tol %||% NA_real_,
+          fragment_mz_tol = input$ms2_fragment_mz_tol %||% NA_real_
+        ),
+        view = list(
+          network_scope = input$network_scope %||% NA_character_,
+          view_mode = input$view_mode %||% NA_character_,
+          min_confidence = input$min_confidence %||% NA_real_,
+          max_render_edges = input$max_render_edges %||% NA_integer_
+        ),
+        cross_polarity_merge = list(
+          ppm = input$cross_ppm %||% NA_real_,
+          rt_tolerance_sec = input$cross_rt_tolerance %||% NA_real_,
+          cor_cutoff = input$cross_cor_cutoff %||% NA_real_
+        ),
+        input_objects = list(
+          positive_available = !is.null(global_data$object_pos_norm),
+          negative_available = !is.null(global_data$object_neg_norm)
+        ),
+        output_objects = list(
+          positive_available = !is.null(global_data$object_pos_network),
+          negative_available = !is.null(global_data$object_neg_network),
+          merged_available = !is.null(global_data$merged_feature_network)
+        ),
+        updated_at = as.character(Sys.time())
+      )
+    })
 
     find_polarity_root <- function(target_dir) {
       all_dirs <- list.dirs(target_dir, recursive = TRUE, full.names = TRUE)
@@ -806,36 +877,7 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
     output$network_vis <- visNetwork::renderVisNetwork({
       display <- rendered_network()
       validate(need(!is.null(display), "No network edges available. Run detection first or lower the confidence cutoff."))
-      visNetwork::visNetwork(display$nodes, display$edges, height = "790px") |>
-        visNetwork::visNodes(shape = "dot", size = 18, font = list(size = 18)) |>
-        visNetwork::visGroups(groupname = "Parent ion", color = "#008080") |>
-        visNetwork::visGroups(groupname = "ISF", color = "#d95f02") |>
-        visNetwork::visGroups(groupname = "Natural isotope", color = "#1b9e77") |>
-        visNetwork::visGroups(groupname = "Adduct", color = "#7570b3") |>
-        visNetwork::visGroups(groupname = "Positive feature", color = "#2c7fb8") |>
-        visNetwork::visGroups(groupname = "Negative feature", color = "#7a5195") |>
-        visNetwork::visGroups(groupname = "Cross-polarity feature", color = "#4d4d4d") |>
-        visNetwork::visGroups(groupname = "Feature", color = "#7f8c8d") |>
-        visNetwork::visGroups(groupname = "Recurrent ion", color = "#0f766e", shape = "box") |>
-        visNetwork::visGroups(groupname = "Resolved recurrent instance", color = "#22c55e") |>
-        visNetwork::visGroups(groupname = "Unresolved recurrent instance", color = "#f59e0b") |>
-        visNetwork::visGroups(groupname = "Resolved parent", color = "#2563eb", shape = "diamond") |>
-        visNetwork::visGroups(groupname = "Neutral loss source", color = "#64748b", shape = "box") |>
-        visNetwork::visEdges(arrows = "to", smooth = FALSE, font = list(align = "middle", size = 12)) |>
-        visNetwork::visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) |>
-        visNetwork::visInteraction(dragNodes = TRUE, dragView = TRUE, hover = TRUE, tooltipDelay = 80) |>
-        visNetwork::visPhysics(enabled = TRUE, stabilization = TRUE) |>
-        visNetwork::visLegend(useGroups = TRUE, position = "right") |>
-        visNetwork::visEvents(
-          selectNode = sprintf(
-            "function(nodes) { Shiny.setInputValue('%s', nodes.nodes[0] || null, {priority: 'event'}); }",
-            ns("node_selected")
-          ),
-          deselectNode = sprintf(
-            "function(nodes) { Shiny.setInputValue('%s', null, {priority: 'event'}); }",
-            ns("node_selected")
-          )
-        )
+      plot_feature_network_widget(display, node_selected_input = ns("node_selected"))
     })
 
     output$network_static <- renderPlot({
@@ -944,8 +986,7 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
     }, ignoreInit = TRUE)
 
     ms1_plot_click <- reactive({
-      req(selected_node_id())
-      plotly::event_data("plotly_click", source = "subnetwork_ms1")
+      plotly::event_data("plotly_click", source = "subnetwork_ms1", priority = "event")
     })
 
     observeEvent(ms1_plot_click(), {
@@ -1035,6 +1076,29 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
       plot_ms1_window(dat)
     })
 
+    output$download_network_plot <- downloadHandler(
+      filename = function() {
+        paste0("feature_network_", sanitize_download_label(input$network_scope), "_",
+               sanitize_download_label(input$view_mode), ".html")
+      },
+      content = function(file) {
+        display <- rendered_network()
+        req(!is.null(display))
+        save_feature_network_widget(plot_feature_network_widget(display), file)
+      }
+    )
+
+    output$download_ms1_window_plot <- downloadHandler(
+      filename = function() {
+        paste0("subnetwork_ms1_", sanitize_download_label(selected_node_id() %||% "unselected"), ".html")
+      },
+      content = function(file) {
+        node_id <- selected_node_id()
+        req(!is.null(node_id))
+        save_feature_network_widget(plot_ms1_window(ms1_window_data()), file)
+      }
+    )
+
     selected_ms1_peak_id <- reactive({
       peak_id <- selected_ms2_feature()
       if (!is.null(peak_id) && nzchar(peak_id)) {
@@ -1095,6 +1159,17 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
       plot_ms2_spectrum(ms2_spectrum_data())
     })
 
+    output$download_ms2_spectrum_plot <- downloadHandler(
+      filename = function() {
+        paste0("assigned_ms2_", sanitize_download_label(selected_ms1_peak_id() %||% "unselected"), ".html")
+      },
+      content = function(file) {
+        feature_id <- selected_ms1_peak_id()
+        req(!is.null(feature_id))
+        save_feature_network_widget(plot_ms2_spectrum(ms2_spectrum_data()), file)
+      }
+    )
+
     feature_eic_data <- reactive({
       feature_id <- selected_ms1_peak_id()
       req(feature_id)
@@ -1139,7 +1214,68 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
       validate(need(!is.null(feature_id), "Click an MS1 peak above."))
       plot_feature_eic(feature_eic_data())
     })
+
+    output$download_feature_eic_plot <- downloadHandler(
+      filename = function() {
+        paste0("raw_xcms_chromatogram_", sanitize_download_label(selected_ms1_peak_id() %||% "unselected"), ".html")
+      },
+      content = function(file) {
+        feature_id <- selected_ms1_peak_id()
+        req(!is.null(feature_id))
+        save_feature_network_widget(plot_feature_eic(feature_eic_data()), file)
+      }
+    )
   })
+}
+
+plot_feature_network_widget <- function(display, node_selected_input = NULL) {
+  widget <- visNetwork::visNetwork(display$nodes, display$edges, height = "790px") |>
+    visNetwork::visNodes(shape = "dot", size = 18, font = list(size = 18)) |>
+    visNetwork::visGroups(groupname = "Parent ion", color = "#008080") |>
+    visNetwork::visGroups(groupname = "ISF", color = "#d95f02") |>
+    visNetwork::visGroups(groupname = "Natural isotope", color = "#1b9e77") |>
+    visNetwork::visGroups(groupname = "Adduct", color = "#7570b3") |>
+    visNetwork::visGroups(groupname = "Positive feature", color = "#2c7fb8") |>
+    visNetwork::visGroups(groupname = "Negative feature", color = "#7a5195") |>
+    visNetwork::visGroups(groupname = "Cross-polarity feature", color = "#4d4d4d") |>
+    visNetwork::visGroups(groupname = "Feature", color = "#7f8c8d") |>
+    visNetwork::visGroups(groupname = "Recurrent ion", color = "#0f766e", shape = "box") |>
+    visNetwork::visGroups(groupname = "Resolved recurrent instance", color = "#22c55e") |>
+    visNetwork::visGroups(groupname = "Unresolved recurrent instance", color = "#f59e0b") |>
+    visNetwork::visGroups(groupname = "Resolved parent", color = "#2563eb", shape = "diamond") |>
+    visNetwork::visGroups(groupname = "Neutral loss source", color = "#64748b", shape = "box") |>
+    visNetwork::visEdges(arrows = "to", smooth = FALSE, font = list(align = "middle", size = 12)) |>
+    visNetwork::visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) |>
+    visNetwork::visInteraction(dragNodes = TRUE, dragView = TRUE, hover = TRUE, tooltipDelay = 80) |>
+    visNetwork::visPhysics(enabled = TRUE, stabilization = TRUE) |>
+    visNetwork::visLegend(useGroups = TRUE, position = "right")
+
+  if (!is.null(node_selected_input) && nzchar(node_selected_input)) {
+    widget <- widget |>
+      visNetwork::visEvents(
+        selectNode = sprintf(
+          "function(nodes) { Shiny.setInputValue('%s', nodes.nodes[0] || null, {priority: 'event'}); }",
+          node_selected_input
+        ),
+        deselectNode = sprintf(
+          "function(nodes) { Shiny.setInputValue('%s', null, {priority: 'event'}); }",
+          node_selected_input
+        )
+      )
+  }
+
+  widget
+}
+
+save_feature_network_widget <- function(widget, file) {
+  htmlwidgets::saveWidget(widget, file = file, selfcontained = TRUE)
+}
+
+sanitize_download_label <- function(x) {
+  x <- as.character(x %||% "plot")
+  x <- gsub("[^A-Za-z0-9._-]+", "_", x)
+  x <- gsub("^_+|_+$", "", x)
+  if (!nzchar(x)) "plot" else x
 }
 
 make_network_display_data <- function(object, network, sub_network = "all", max_edges = Inf) {
@@ -2217,29 +2353,38 @@ extract_feature_eic_data <- function(wd,
 
 find_xcms_xdata_path <- function(wd, mode) {
   mode_dir <- if (identical(mode, "negative")) "NEG" else "POS"
-  ms1_root <- file.path(wd, "MS1")
-  if (!dir.exists(ms1_root)) {
+  search_roots <- unique(c(file.path(wd, "MS1"), wd))
+  search_roots <- search_roots[dir.exists(search_roots)]
+  if (length(search_roots) == 0) {
     return(NULL)
   }
 
-  candidates <- list.files(
-    ms1_root,
-    pattern = "^(xdata3|xdata2|xdata)$",
-    recursive = TRUE,
-    full.names = TRUE,
-    all.files = FALSE,
-    no.. = TRUE
-  )
+  candidates <- unlist(lapply(search_roots, function(root) {
+    list.files(
+      root,
+      pattern = "^(xdata3|xdata2|xdata)(\\.(rda|RData))?$",
+      recursive = TRUE,
+      full.names = TRUE,
+      all.files = FALSE,
+      no.. = TRUE,
+      ignore.case = TRUE
+    )
+  }), use.names = FALSE)
+  candidates <- unique(candidates)
   candidates <- candidates[
-    grepl(paste0(.Platform$file.sep, mode_dir, .Platform$file.sep), candidates) &
-      grepl(paste0(.Platform$file.sep, "Result", .Platform$file.sep, "intermediate_data", .Platform$file.sep), candidates)
+    grepl(paste0(.Platform$file.sep, mode_dir, .Platform$file.sep), candidates)
   ]
   if (length(candidates) == 0) {
     return(NULL)
   }
 
-  priority <- match(basename(candidates), c("xdata3", "xdata2", "xdata"))
-  candidates[order(priority, nchar(candidates))][1]
+  in_intermediate <- grepl(
+    paste0(.Platform$file.sep, "Result", .Platform$file.sep, "intermediate_data", .Platform$file.sep),
+    candidates
+  )
+  base_no_ext <- sub("\\.(rda|RData)$", "", basename(candidates), ignore.case = TRUE)
+  priority <- match(base_no_ext, c("xdata3", "xdata2", "xdata"))
+  candidates[order(!in_intermediate, priority, nchar(candidates))][1]
 }
 
 xchromatograms_to_plot_data <- function(chrom, max_traces = 8) {

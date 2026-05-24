@@ -8,18 +8,21 @@ metminer_filter_redundant_annotations <- function(positive_object = NULL,
                                                    rt_tolerance = 10,
                                                    min_high_conf_level = 2,
                                                    use_network_validation = TRUE,
-                                                   drop_suspected_recurrent_background = FALSE) {
+                                                   drop_suspected_recurrent_background = FALSE,
+                                                   adduct_advice = NULL) {
   pos <- metminer_build_annotation_filter_mode_table(
     positive_object,
     mode = "positive",
     min_high_conf_level = min_high_conf_level,
-    use_network_validation = use_network_validation
+    use_network_validation = use_network_validation,
+    adduct_advice = adduct_advice
   )
   neg <- metminer_build_annotation_filter_mode_table(
     negative_object,
     mode = "negative",
     min_high_conf_level = min_high_conf_level,
-    use_network_validation = use_network_validation
+    use_network_validation = use_network_validation,
+    adduct_advice = adduct_advice
   )
 
   candidates <- dplyr::bind_rows(pos$candidates, neg$candidates)
@@ -48,7 +51,8 @@ metminer_filter_redundant_annotations <- function(positive_object = NULL,
 metminer_build_annotation_filter_mode_table <- function(object,
                                                         mode,
                                                         min_high_conf_level = 2,
-                                                        use_network_validation = TRUE) {
+                                                        use_network_validation = TRUE,
+                                                        adduct_advice = NULL) {
   if (is.null(object)) {
     return(list(candidates = data.frame(), feature_table = data.frame()))
   }
@@ -58,7 +62,11 @@ metminer_build_annotation_filter_mode_table <- function(object,
   expression_data <- metminer_safe_extract_expression_data(object)
   feature_info <- metminer_annotation_filter_feature_info(variable_info, expression_data)
   best_feature_annotations <- metminer_annotation_filter_best_candidates(
-    annotation_table, use_network_validation = use_network_validation, object = object
+    annotation_table,
+    mode = mode,
+    use_network_validation = use_network_validation,
+    object = object,
+    adduct_advice = adduct_advice
   )
 
   validation <- if (isTRUE(use_network_validation)) metminer_extract_annotation_validation(object) else list()
@@ -82,7 +90,8 @@ metminer_build_annotation_filter_mode_table <- function(object,
     feature_info = feature_info,
     mode = mode,
     network_features = network_features,
-    min_high_conf_level = min_high_conf_level
+    min_high_conf_level = min_high_conf_level,
+    adduct_advice = adduct_advice
   )
 
   candidates <- dplyr::bind_rows(network_rows, single_rows)
@@ -119,8 +128,16 @@ metminer_annotation_filter_feature_info <- function(variable_info, expression_da
 #' Pick best annotation candidate per feature, optionally using network scores
 #'
 #' @noRd
-metminer_annotation_filter_best_candidates <- function(annotation_table, use_network_validation = TRUE, object = NULL) {
+metminer_annotation_filter_best_candidates <- function(annotation_table,
+                                                       mode = c("positive", "negative"),
+                                                       use_network_validation = TRUE,
+                                                       object = NULL,
+                                                       adduct_advice = NULL) {
+  mode <- match.arg(mode)
   candidates <- metminer_prepare_annotation_candidates(annotation_table)
+  if (nrow(candidates) == 0) return(data.frame())
+  candidates <- metminer_add_annotation_layer_columns(candidates, mode, adduct_advice)
+  candidates <- candidates[candidates$strict_genome_adduct_pass %in% TRUE, , drop = FALSE]
   if (nrow(candidates) == 0) return(data.frame())
 
   if (isTRUE(use_network_validation) && !is.null(object)) {
@@ -128,6 +145,9 @@ metminer_annotation_filter_best_candidates <- function(annotation_table, use_net
     validated <- validation$candidate_validation
     if (!is.null(validated) && nrow(validated) > 0) {
       candidates <- validated
+      candidates <- metminer_add_annotation_layer_columns(candidates, mode, adduct_advice)
+      candidates <- candidates[candidates$strict_genome_adduct_pass %in% TRUE, , drop = FALSE]
+      if (nrow(candidates) == 0) return(data.frame())
     } else {
       # No validation ran yet — fall back to metid-only scores
       candidates$metid_score_norm <- normalize_annotation_score(candidates$Total.score)
@@ -139,6 +159,13 @@ metminer_annotation_filter_best_candidates <- function(annotation_table, use_net
     candidates$metid_score_norm <- normalize_annotation_score(candidates$Total.score)
     candidates$network_support_score <- 0
     candidates$network_conflict_score <- 0
+    candidates$final_score <- candidates$metid_score_norm
+  }
+
+  if (!"final_score" %in% colnames(candidates)) {
+    candidates$metid_score_norm <- normalize_annotation_score(candidates$Total.score)
+    candidates$network_support_score <- candidates$network_support_score %||% 0
+    candidates$network_conflict_score <- candidates$network_conflict_score %||% 0
     candidates$final_score <- candidates$metid_score_norm
   }
 
@@ -177,6 +204,11 @@ metminer_build_network_metabolite_rows <- function(roles, hypothesis, feature_in
       representative_adduct = representative_adduct,
       member_adducts = metminer_collapse_unique_text(sub_roles$selected_adduct),
       member_annotation_levels = metminer_collapse_unique_text(sub_roles$metid_level),
+      annotation_layer = "network_integrated",
+      evidence_scope = "Integrated feature-network evidence with annotation candidate support",
+      core_adduct_match = NA,
+      strict_genome_adduct_pass = TRUE,
+      metminer_confidence_level = if (!semi && level <= min_high_conf_level) "Network-supported high-confidence candidate" else "Network-supported semi-annotation",
       confidence_class = if (!semi && level <= min_high_conf_level) "high_confidence_network" else "semi_annotated_network",
       semi_annotation = if (semi) semi_label else NA_character_,
       mz = parent$mz[1],
@@ -201,7 +233,8 @@ metminer_build_single_feature_metabolite_rows <- function(best_feature_annotatio
                                                           feature_info,
                                                           mode,
                                                           network_features,
-                                                          min_high_conf_level) {
+                                                          min_high_conf_level,
+                                                          adduct_advice = NULL) {
   if (nrow(best_feature_annotations) == 0) return(data.frame())
   singles <- best_feature_annotations[!best_feature_annotations$variable_id %in% network_features, , drop = FALSE]
   if (nrow(singles) == 0) return(data.frame())
@@ -210,6 +243,20 @@ metminer_build_single_feature_metabolite_rows <- function(best_feature_annotatio
   level <- suppressWarnings(as.integer(singles$Level))
   compound <- if ("Compound.name" %in% colnames(singles)) singles$Compound.name else NA_character_
   adduct <- if ("Adduct" %in% colnames(singles)) singles$Adduct else NA_character_
+  layer <- singles$annotation_layer %||% metminer_annotation_evidence_layer(
+    database = singles$Database %||% NA_character_,
+    kegg_id = singles$KEGG.ID %||% NA_character_,
+    plantcyc_id = singles$PlantCyc.ID %||% singles$BIOCYC.ID %||% NA_character_,
+    lab_id = singles$Lab.ID %||% NA_character_
+  )
+  core_adduct <- singles$core_adduct_match %||% metminer_is_strict_core_adduct(adduct, mode, adduct_advice)
+  strict_pass <- singles$strict_genome_adduct_pass %||% (!metminer_is_genome_layer(layer) | core_adduct)
+  confidence_level <- singles$metminer_confidence_level %||% metminer_annotation_level_label(
+    level = level,
+    layer = layer,
+    strict_core_adduct = core_adduct,
+    spectral_match = layer %in% c("public_ms2", "local_spectral_optional", "other_spectral")
+  )
 
   data.frame(
     metabolite_id = singles$variable_id,
@@ -222,6 +269,11 @@ metminer_build_single_feature_metabolite_rows <- function(best_feature_annotatio
     representative_adduct = adduct,
     member_adducts = adduct,
     member_annotation_levels = as.character(level),
+    annotation_layer = layer,
+    evidence_scope = metminer_annotation_evidence_scope(layer),
+    core_adduct_match = core_adduct,
+    strict_genome_adduct_pass = strict_pass,
+    metminer_confidence_level = confidence_level,
     confidence_class = ifelse(!is.na(level) & level <= min_high_conf_level, "high_confidence_single", "low_confidence_best_candidate"),
     semi_annotation = NA_character_,
     mz = info$mz,

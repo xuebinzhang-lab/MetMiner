@@ -267,6 +267,36 @@ mod_data_norm_server <- function(id, global_data, prj_init) {
       }
     }
 
+    observe({
+      global_data$normalization_advisor_state <- list(
+        available = TRUE,
+        normalization_method = input$norm_method %||% NA_character_,
+        integration_method = input$integ_method %||% NA_character_,
+        keep_scale = isTRUE(input$keep_scale),
+        svr = list(
+          optimization = isTRUE(input$svr_opt),
+          begin = input$svr_begin %||% NA_real_,
+          end = input$svr_end %||% NA_real_,
+          step = input$svr_step %||% NA_real_,
+          multiple = input$svr_multiple %||% NA_real_
+        ),
+        pqn_reference = input$pqn_ref %||% NA_character_,
+        plot_controls = list(
+          positive = list(pca_color = input$pos_pca_color %||% NA_character_, rsd_color = input$pos_rsd_color %||% NA_character_),
+          negative = list(pca_color = input$neg_pca_color %||% NA_character_, rsd_color = input$neg_rsd_color %||% NA_character_)
+        ),
+        input_objects = list(
+          positive_available = !is.null(get_input_obj("positive")),
+          negative_available = !is.null(get_input_obj("negative"))
+        ),
+        output_objects = list(
+          positive_available = !is.null(global_data$object_pos_norm),
+          negative_available = !is.null(global_data$object_neg_norm)
+        ),
+        updated_at = as.character(Sys.time())
+      )
+    })
+
     # Update UI choices based on input data
     observe({
       for(mode in c("positive", "negative")) {

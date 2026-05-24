@@ -2,6 +2,29 @@
 
 ## v0.1.0.9005 / app 2.0.2 (development)
 
+### 2026-05-24 — MetMiner Bot module advisors and downstream workflow polish
+
+- **Added module-aware MetMiner Bot advisors** for data import, noise filtering, outlier review, missing-value imputation, normalization, feature networking, annotation, annotation filtering, differential analysis, enrichment, and database construction.
+- **Captured live Shiny module state for AI guidance**, including current parameters, available POS/NEG objects, object summaries, selected features/pathways, and key result tables so Bot recommendations are grounded in the active project.
+- **Added conservative advisor prompts** that separate observed evidence from recommendations and warn when missing plots, sample metadata, annotations, or pathway IDs make a decision under-supported.
+- **Improved downstream interactive review support** for differential analysis, pathway enrichment, feature-network inspection, plot downloads, and PlantCyc/KEGG enrichment handling.
+- **Connected PlantCyc database results to global project context**, allowing database and enrichment advisors to reason over both KEGG and PlantCyc resources.
+
+*Co-authored with Codex (OpenAI GPT-5) and Shawn*
+
+---
+
+### 2026-05-21 — Layered annotation evidence strategy
+
+- **Refined the annotation workflow into two evidence layers**: Layer 1 genome-informed KEGG/PlantCyc reaction candidates and Layer 2 spectral evidence from public MS2 libraries plus optional local/custom standard libraries.
+- **Added strict core-adduct gating for Layer 1 candidates** during annotation filtering, so KEGG/PlantCyc reaction-derived candidates must pass high-confidence adduct rules before entering review and non-redundant outputs.
+- **Added layered evidence fields** to expand, collapse, final non-redundant, redundancy audit, and AI evidence bundles: `annotation_layer`, `evidence_scope`, `core_adduct_match`, `strict_genome_adduct_pass`, and `metminer_confidence_level`.
+- **Updated AI annotation review prompts and documentation** so the reviewer can validate Layer 1 Level 3 candidates with MS2 evidence, while also allowing public/local spectral evidence to supplement metabolites missing from reaction databases.
+
+*Co-authored with Codex (OpenAI GPT-5) and Shawn*
+
+---
+
 ### 2026-05-08 — PlantCyc/KEGG organism database construction
 
 - **Added a PlantCyc database construction toolkit** under `Toolkits`, including SmartTable upload guidance, LC-MS-oriented compound filtering, metID-compatible MS1/MS2 database generation, and metpath pathway database generation.

@@ -236,6 +236,49 @@ mod_data_outlier_server <- function(id, global_data, prj_init) {
     )
 
     observe({
+      global_data$outlier_advisor_state <- list(
+        available = TRUE,
+        outlier_method = input$outlier_method %||% "By tidymass",
+        auto_criteria = input$auto_criteria %||% character(),
+        thresholds = list(
+          th_na = input$th_na %||% 0.5,
+          th_sd = input$th_sd %||% 6,
+          th_mad = input$th_mad %||% 6,
+          th_dist = input$th_dist %||% 0.05
+        ),
+        manual_selection = list(
+          positive = input$manual_pos %||% character(),
+          negative = input$manual_neg %||% character()
+        ),
+        plot_controls = list(
+          positive = list(
+            color_by = input$pos_color %||% NA_character_,
+            label_by = input$pos_label %||% NA_character_,
+            scale = isTRUE(input$pos_scale)
+          ),
+          negative = list(
+            color_by = input$neg_color %||% NA_character_,
+            label_by = input$neg_label %||% NA_character_,
+            scale = isTRUE(input$neg_scale)
+          )
+        ),
+        removed = list(
+          positive = outlier_info$pos_removed %||% character(),
+          negative = outlier_info$neg_removed %||% character()
+        ),
+        input_objects = list(
+          positive_available = !is.null(get_input_obj("positive")),
+          negative_available = !is.null(get_input_obj("negative"))
+        ),
+        output_objects = list(
+          positive_available = !is.null(global_data$object_pos_outlier),
+          negative_available = !is.null(global_data$object_neg_outlier)
+        ),
+        updated_at = as.character(Sys.time())
+      )
+    })
+
+    observe({
       # Update Manual Choices & Plot Choices
       for(mode in c("positive", "negative")) {
         obj <- get_input_obj(mode)

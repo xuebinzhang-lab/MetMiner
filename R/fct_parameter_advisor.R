@@ -45,6 +45,73 @@ metminer_parse_lcms_method <- function(method_text = "", instrument_type = "auto
   )
 }
 
+#' Extract project-level LC-MS condition fields from free text
+#'
+#' @noRd
+metminer_extract_lcms_items <- function(method_text = "",
+                                        instrument_type = "auto",
+                                        chromatography = "auto") {
+  text <- paste(method_text %||% "", collapse = "\n")
+  ctx <- metminer_parse_lcms_method(text, instrument_type, chromatography)
+  pick_first <- function(pattern, default = "") {
+    hit <- regmatches(text, regexpr(pattern, text, ignore.case = TRUE, perl = TRUE))
+    if (length(hit) == 0 || !nzchar(hit[1])) default else trimws(hit[1])
+  }
+  pick_line <- function(pattern, default = "") {
+    lines <- unlist(strsplit(text, "\n", fixed = TRUE), use.names = FALSE)
+    hit <- lines[grepl(pattern, lines, ignore.case = TRUE, perl = TRUE)]
+    if (length(hit) == 0) default else trimws(hit[1])
+  }
+  strip_label <- function(x) {
+    x <- trimws(x %||% "")
+    trimws(sub("^[^:：]{1,40}[:：]\\s*", "", x, perl = TRUE))
+  }
+  ion_mode <- paste(c(
+    if (isTRUE(ctx$positive_mode)) "positive" else NULL,
+    if (isTRUE(ctx$negative_mode)) "negative" else NULL
+  ), collapse = "; ")
+  if (!nzchar(ion_mode)) ion_mode <- if (grepl("positive|negative|正离子|负离子", tolower(text), perl = TRUE)) "positive; negative" else ""
+
+  list(
+    method_text = text,
+    instrument = ctx$instrument,
+    chromatography = ctx$chromatography,
+    column = strip_label(pick_line("column|色谱柱|stationary", "")),
+    mobile_phase_a = strip_label(pick_line("mobile phase a|phase a|流动相\\s*a|A相", "")),
+    mobile_phase_b = strip_label(pick_line("mobile phase b|phase b|流动相\\s*b|B相", "")),
+    ion_source = if (grepl("\\besi\\b|electrospray|电喷雾", text, ignore.case = TRUE, perl = TRUE)) "ESI" else "",
+    ion_mode = ion_mode,
+    acquisition = if (ctx$dda) "Full scan DDA MS/MS" else pick_line("dda|data dependent|full scan|ms/ms|ms2|采集", ""),
+    scan_range = if (length(ctx$scan_range) > 0) ctx$scan_range[1] else pick_first("m/z\\s*[0-9,.-]+\\s*[–-]\\s*[0-9,.-]+", ""),
+    collision_energy = pick_first("(NCE|nce|collision energy|碰撞能量)\\s*[:=]?\\s*[0-9,./ ;+-]+", pick_line("collision|nce|碰撞|能量", ""))
+  )
+}
+
+#' Format project-level LC-MS condition fields for prompts
+#'
+#' @noRd
+metminer_format_lcms_conditions <- function(items = list()) {
+  items <- items %||% list()
+  fields <- c(
+    instrument = "Instrument",
+    chromatography = "Chromatography",
+    column = "Column/stationary phase",
+    mobile_phase_a = "Mobile phase A",
+    mobile_phase_b = "Mobile phase B",
+    ion_source = "Ion source",
+    ion_mode = "Ion mode",
+    acquisition = "Acquisition",
+    scan_range = "Scan range",
+    collision_energy = "Collision energy"
+  )
+  lines <- vapply(names(fields), function(key) {
+    value <- trimws(as.character(items[[key]] %||% ""))
+    paste0(fields[[key]], ": ", value)
+  }, character(1))
+  notes <- trimws(as.character(items$method_text %||% ""))
+  paste(c(lines, if (nzchar(notes)) paste0("Original method text:\n", notes) else NULL), collapse = "\n")
+}
+
 #' Build LC-MS annotation/filter parameter advice from parsed method context
 #'
 #' @noRd

@@ -183,7 +183,7 @@ mod_plantcyc_database_ui <- function(id) {
 #'
 #' @param id Module id.
 #' @noRd
-mod_plantcyc_database_server <- function(id) {
+mod_plantcyc_database_server <- function(id, global_data = NULL) {
   moduleServer(id, function(input, output, session) {
     ns <- session$ns
     progress_handlers <- create_progress_handlers(ns)
@@ -304,6 +304,29 @@ mod_plantcyc_database_server <- function(id) {
     output$tbl_removed <- DT::renderDataTable({
       req(state$result)
       DT::datatable(state$result$clean_result$removed_compounds, options = list(scrollX = TRUE, pageLength = 10))
+    })
+
+    observe({
+      if (is.null(global_data)) return()
+      global_data$database_advisor_state <- modifyList(global_data$database_advisor_state %||% list(), list(
+        available = TRUE,
+        plantcyc = list(
+          compound_file_name = input$compound_file$name %||% NA_character_,
+          pathway_file_name = input$pathway_file$name %||% NA_character_,
+          output_dir = input$output_dir %||% NA_character_,
+          output_prefix = input$output_prefix %||% NA_character_,
+          min_mw = input$min_mw %||% NA_real_,
+          max_mw = input$max_mw %||% NA_real_,
+          mass_ppm = input$mass_ppm %||% NA_real_,
+          mass_da = input$mass_da %||% NA_real_,
+          use_classyfire = isTRUE(input$use_classyfire),
+          classyfire_sleep = input$classyfire_sleep %||% NA_real_,
+          classyfire_retries = input$classyfire_retries %||% NA_integer_,
+          result_available = !is.null(state$result),
+          status = state$status
+        ),
+        updated_at = as.character(Sys.time())
+      ))
     })
 
     observeEvent(input$run, {
@@ -496,6 +519,9 @@ mod_plantcyc_database_server <- function(id) {
           rda_files = rda_files
         )
         state$result <- result
+        if (!is.null(global_data)) {
+          global_data$plantcyc_database_result <- result
+        }
         state$status <- paste0(
           "Completed.\n",
           "Output folder: ", output_dir, "\n",

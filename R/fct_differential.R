@@ -1,7 +1,13 @@
 # ---- Differential abundance metabolite helpers ----
 
-metminer_analysis_object <- function(global_data, mode = c("positive", "negative")) {
+metminer_analysis_object <- function(global_data, mode = c("merged", "positive", "negative")) {
   mode <- match.arg(mode)
+  if (identical(mode, "merged")) {
+    return(metminer_merge_polarity_analysis_objects(
+      positive_object = metminer_analysis_object(global_data, "positive"),
+      negative_object = metminer_analysis_object(global_data, "negative")
+    ))
+  }
   slots <- if (identical(mode, "positive")) {
     c("object_pos_norm", "object_pos_annotated", "object_pos_clean", "object_pos_raw")
   } else {
@@ -12,6 +18,55 @@ metminer_analysis_object <- function(global_data, mode = c("positive", "negative
     if (!is.null(obj)) return(obj)
   }
   NULL
+}
+
+metminer_prefix_massdataset_variables <- function(object, prefix) {
+  if (is.null(object)) return(NULL)
+  if (!inherits(object, "mass_dataset")) {
+    stop("Input object must be a mass_dataset object.", call. = FALSE)
+  }
+  prefix <- as.character(prefix)
+  expr <- as.data.frame(massdataset::extract_expression_data(object), stringsAsFactors = FALSE)
+  old_ids <- rownames(expr)
+  if (is.null(old_ids) || any(!has_text(old_ids))) {
+    old_ids <- as.character(massdataset::extract_variable_info(object)$variable_id)
+  }
+  new_ids <- paste(prefix, old_ids, sep = "::")
+  rownames(expr) <- new_ids
+  object@expression_data <- expr
+
+  variable_info <- as.data.frame(massdataset::extract_variable_info(object), stringsAsFactors = FALSE)
+  if (!"variable_id" %in% colnames(variable_info)) {
+    variable_info$variable_id <- old_ids
+  }
+  variable_info$source_variable_id <- as.character(variable_info$variable_id)
+  variable_info$variable_id <- paste(prefix, variable_info$source_variable_id, sep = "::")
+  variable_info$polarity <- if (identical(prefix, "pos")) "positive" else if (identical(prefix, "neg")) "negative" else prefix
+  object@variable_info <- variable_info
+
+  ann <- as.data.frame(object@annotation_table %||% data.frame(), stringsAsFactors = FALSE)
+  if (nrow(ann) > 0) {
+    for (col in intersect(c("variable_id", "Variable_id"), colnames(ann))) {
+      ann[[paste0("source_", col)]] <- as.character(ann[[col]])
+      ann[[col]] <- paste(prefix, ann[[paste0("source_", col)]], sep = "::")
+    }
+    object@annotation_table <- ann
+  }
+  massdataset::update_variable_info(object)
+}
+
+metminer_merge_polarity_analysis_objects <- function(positive_object = NULL, negative_object = NULL) {
+  objs <- list()
+  if (!is.null(positive_object)) {
+    objs$positive <- metminer_prefix_massdataset_variables(positive_object, "pos")
+  }
+  if (!is.null(negative_object)) {
+    objs$negative <- metminer_prefix_massdataset_variables(negative_object, "neg")
+  }
+  objs <- objs[!vapply(objs, is.null, logical(1))]
+  if (length(objs) == 0) return(NULL)
+  if (length(objs) == 1) return(objs[[1]])
+  massdataset::rbind_mass_dataset(objs[[1]], objs[[2]])
 }
 
 metminer_sample_group_columns <- function(object) {
@@ -60,16 +115,75 @@ metminer_parse_comparison <- function(comparison_pair) {
   list(case_group = x[1], control_group = x[2])
 }
 
+metminer_standardize_annotation_columns <- function(x) {
+  x <- as.data.frame(x %||% data.frame(), stringsAsFactors = FALSE)
+  if (nrow(x) == 0) return(x)
+  canonical <- c(
+    variable_id = "Variable_id",
+    variable.id = "Variable_id",
+    variableid = "Variable_id",
+    compound.name = "Compound.name",
+    compound_name = "Compound.name",
+    kegg.id = "KEGG.ID",
+    kegg_id = "KEGG.ID",
+    plantcyc.id = "PlantCyc.ID",
+    plantcyc_id = "PlantCyc.ID",
+    lab.id = "Lab.ID",
+    lab_id = "Lab.ID",
+    adduct = "Adduct",
+    database = "Database",
+    level = "Level",
+    sub_net_id = "Sub_net_id",
+    mode = "mode"
+  )
+  keys <- tolower(colnames(x))
+  keys <- gsub("[^a-z0-9]+", ".", keys)
+  keys <- gsub("^\\.|\\.$", "", keys)
+  for (i in seq_along(keys)) {
+    if (keys[i] %in% names(canonical)) {
+      colnames(x)[i] <- canonical[[keys[i]]]
+    }
+  }
+  x
+}
+
+metminer_annotation_polarity_prefix <- function(x) {
+  x <- tolower(trimws(as.character(x %||% NA_character_)))
+  out <- rep(NA_character_, length(x))
+  out[x %in% c("positive", "pos", "+")] <- "pos"
+  out[x %in% c("negative", "neg", "-")] <- "neg"
+  out
+}
+
+metminer_infer_polarity_prefix <- function(variable_id) {
+  variable_id <- as.character(variable_id %||% NA_character_)
+  out <- rep(NA_character_, length(variable_id))
+  out[grepl("(^pos::|_pos$)", variable_id, ignore.case = TRUE)] <- "pos"
+  out[grepl("(^neg::|_neg$)", variable_id, ignore.case = TRUE)] <- "neg"
+  out
+}
+
 metminer_dam_readable_annotation <- function(annotation_filter_result, mode) {
   if (is.null(annotation_filter_result)) return(data.frame(variable_id = character()))
   x <- annotation_filter_result$collapse_table %||% annotation_filter_result$expand_table %||% data.frame()
+  x <- metminer_standardize_annotation_columns(x)
   if (nrow(x) == 0 || !"Variable_id" %in% colnames(x)) return(data.frame(variable_id = character()))
-  if ("mode" %in% colnames(x)) {
-    x <- x[x$mode == mode | is.na(x$mode), , drop = FALSE]
+  if ("mode" %in% colnames(x) && !identical(mode, "merged")) {
+    mode_prefix <- metminer_annotation_polarity_prefix(mode)
+    row_prefix <- metminer_annotation_polarity_prefix(x$mode)
+    x <- x[row_prefix == mode_prefix | is.na(row_prefix), , drop = FALSE]
   }
   x$variable_id <- as.character(x$Variable_id)
+  if (identical(mode, "merged")) {
+    prefix <- if ("mode" %in% colnames(x)) metminer_annotation_polarity_prefix(x$mode) else rep(NA_character_, nrow(x))
+    inferred <- metminer_infer_polarity_prefix(x$variable_id)
+    prefix[!has_text(prefix) & has_text(inferred)] <- inferred[!has_text(prefix) & has_text(inferred)]
+    has_prefix <- grepl("^pos::|^neg::", x$variable_id)
+    use_prefix <- has_text(prefix) & !has_prefix
+    x$variable_id[use_prefix] <- paste(prefix[use_prefix], x$variable_id[use_prefix], sep = "::")
+  }
   keep <- intersect(
-    c("variable_id", "Compound.name", "KEGG.ID", "PlantCyc.ID", "Lab.ID", "Adduct", "Database", "Level", "Sub_net_id"),
+    c("variable_id", "Compound.name", "KEGG.ID", "PlantCyc.ID", "Lab.ID", "Adduct", "Database", "Level", "Sub_net_id", "mode"),
     colnames(x)
   )
   x <- x[, keep, drop = FALSE]
@@ -111,7 +225,7 @@ metminer_build_dam_statistics <- function(object,
                                           group_column = "group",
                                           control_group,
                                           case_group,
-                                          mode = c("positive", "negative"),
+                                          mode = c("merged", "positive", "negative"),
                                           annotation_filter_result = NULL,
                                           mean_median = c("mean", "median"),
                                           test_method = c("t.test", "wilcox.test"),
@@ -205,7 +319,7 @@ metminer_mutate_dam <- function(object,
                                 group_column = "group",
                                 control_group,
                                 case_group,
-                                mode = c("positive", "negative"),
+                                mode = c("merged", "positive", "negative"),
                                 annotation_filter_result = NULL,
                                 mean_median = c("mean", "median"),
                                 test_method = c("t.test", "wilcox.test"),
@@ -237,7 +351,7 @@ metminer_mutate_dam <- function(object,
   object
 }
 
-metminer_extract_dam_table <- function(object, annotation_filter_result = NULL, mode = c("positive", "negative"),
+metminer_extract_dam_table <- function(object, annotation_filter_result = NULL, mode = c("merged", "positive", "negative"),
                                        p_column = NULL) {
   mode <- match.arg(mode)
   stats <- attr(object, "metminer_dam", exact = TRUE)
@@ -264,7 +378,7 @@ metminer_run_dam <- function(object,
                              group_column = "group",
                              control_group,
                              case_group,
-                             mode = c("positive", "negative"),
+                             mode = c("merged", "positive", "negative"),
                              annotation_filter_result = NULL,
                              mean_median = c("mean", "median"),
                              test_method = c("t.test", "wilcox.test"),
@@ -297,9 +411,21 @@ metminer_run_dam <- function(object,
   )
 }
 
+metminer_has_annotation <- function(x) {
+  x <- as.data.frame(x %||% data.frame(), stringsAsFactors = FALSE)
+  if (nrow(x) == 0) return(logical())
+  ann_cols <- intersect(c("Compound.name", "KEGG.ID", "PlantCyc.ID", "Lab.ID"), colnames(x))
+  if (length(ann_cols) == 0) return(rep(FALSE, nrow(x)))
+  Reduce(`|`, lapply(ann_cols, function(col) has_text(x[[col]])))
+}
+
 metminer_plot_volcano <- function(dam_result, fc_cutoff = 1.5, p_cutoff = 0.05,
-                                  p_column = "p_value_adjust", interactive = TRUE) {
+                                  p_column = "p_value_adjust", interactive = TRUE,
+                                  annotated_only = FALSE) {
   x <- as.data.frame(dam_result %||% data.frame(), stringsAsFactors = FALSE)
+  if (isTRUE(annotated_only) && nrow(x) > 0) {
+    x <- x[metminer_has_annotation(x), , drop = FALSE]
+  }
   if (nrow(x) == 0) {
     if (interactive) return(plotly::plot_ly())
     return(ggplot2::ggplot())
@@ -309,6 +435,12 @@ metminer_plot_volcano <- function(dam_result, fc_cutoff = 1.5, p_cutoff = 0.05,
   x$hover_text <- paste0(
     "Feature: ", x$variable_id,
     "<br>Compound: ", label,
+    if ("mz" %in% colnames(x)) paste0("<br>m/z: ", signif(suppressWarnings(as.numeric(x$mz)), 6)) else "",
+    if ("rt" %in% colnames(x)) paste0("<br>RT: ", signif(suppressWarnings(as.numeric(x$rt)), 5)) else "",
+    if ("KEGG.ID" %in% colnames(x)) paste0("<br>KEGG: ", x$KEGG.ID) else "",
+    if ("PlantCyc.ID" %in% colnames(x)) paste0("<br>PlantCyc: ", x$PlantCyc.ID) else "",
+    if ("Lab.ID" %in% colnames(x)) paste0("<br>Lab ID: ", x$Lab.ID) else "",
+    if ("Adduct" %in% colnames(x)) paste0("<br>Adduct: ", x$Adduct) else "",
     "<br>log2FC: ", round(x$log2_fc, 3),
     "<br>p: ", signif(x$p_value, 3),
     "<br>FDR: ", signif(x$p_value_adjust, 3),

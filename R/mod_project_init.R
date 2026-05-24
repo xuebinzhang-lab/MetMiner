@@ -94,6 +94,43 @@ mod_project_init_ui <- function(id) {
               selectInput(ns("batch_raw"), "Batch", choices = NULL)
             ),
 
+            # --- Panel 2: Optional LC-MS method context ---
+            bslib::accordion_panel(
+              title = "LC-MS Conditions",
+              icon = bsicons::bs_icon("clipboard-data"),
+
+              tags$small(
+                class = "text-muted d-block mb-2",
+                "Optional project-level method context. It will be reused by parameter advice, AI annotation review, and MetMiner Bot prompts."
+              ),
+              textAreaInput(
+                ns("lcms_method_text"),
+                "Paste LC-MS method text",
+                value = "",
+                rows = 8,
+                placeholder = paste(
+                  "Instrument: Orbitrap Exploris 240",
+                  "Column: C18 ...",
+                  "Mobile phase A: water + 0.1% formic acid",
+                  "Mobile phase B: acetonitrile",
+                  "Ion source: ESI; positive and negative; full scan DDA MS/MS",
+                  "Scan range: m/z 70-1050; NCE 20/40/60",
+                  sep = "\n"
+                )
+              ),
+              actionButton(ns("autofill_lcms"), "Auto fill key items", icon = icon("wand-magic-sparkles"), class = "btn-outline-primary w-100 mb-2"),
+              selectInput(ns("lcms_instrument"), "Instrument class",
+                          choices = c("Auto detect" = "auto", "Orbitrap", "QTOF", "Other"), selected = "auto"),
+              selectInput(ns("lcms_chromatography"), "Chromatography",
+                          choices = c("Auto detect" = "auto", "C18 reversed phase", "HILIC", "Other"), selected = "auto"),
+              textInput(ns("lcms_column"), "Column / stationary phase", value = ""),
+              textInput(ns("lcms_mobile_a"), "Mobile phase A", value = ""),
+              textInput(ns("lcms_mobile_b"), "Mobile phase B", value = ""),
+              textInput(ns("lcms_ion_mode"), "Ion mode", value = "", placeholder = "positive; negative"),
+              textInput(ns("lcms_scan_range"), "Scan range", value = "", placeholder = "m/z 70-1050"),
+              textInput(ns("lcms_collision"), "Collision energy", value = "", placeholder = "NCE 20/40/60")
+            ),
+
             # --- Panel 2: Resuming Task ---
             bslib::accordion_panel(
               title = "Resuming Task",
@@ -150,11 +187,16 @@ mod_project_init_ui <- function(id) {
             ),
 
             bslib::layout_columns(
-              col_widths = c(12),
+              col_widths = c(7, 5),
               bslib::card(
                 height = "400px",
                 bslib::card_header("Sample Information Summary", class = "bg-light"),
                 DT::dataTableOutput(ns("tbl_sample_info"))
+              ),
+              bslib::card(
+                height = "400px",
+                bslib::card_header("LC-MS Conditions", class = "bg-light"),
+                verbatimTextOutput(ns("lcms_summary"), placeholder = TRUE)
               )
             ),
 
@@ -251,6 +293,29 @@ mod_project_init_server <- function(id, prj_init) {
       }
     })
 
+    current_lcms_items <- reactive({
+      list(
+        method_text = input$lcms_method_text %||% "",
+        instrument = input$lcms_instrument %||% "auto",
+        chromatography = input$lcms_chromatography %||% "auto",
+        column = input$lcms_column %||% "",
+        mobile_phase_a = input$lcms_mobile_a %||% "",
+        mobile_phase_b = input$lcms_mobile_b %||% "",
+        ion_source = "ESI",
+        ion_mode = input$lcms_ion_mode %||% "",
+        scan_range = input$lcms_scan_range %||% "",
+        collision_energy = input$lcms_collision %||% ""
+      )
+    })
+
+    output$lcms_summary <- renderText({
+      if (!is.null(prj_init$lcms_conditions_text) && nzchar(trimws(prj_init$lcms_conditions_text))) {
+        return(prj_init$lcms_conditions_text)
+      }
+      txt <- metminer_format_lcms_conditions(current_lcms_items())
+      if (nzchar(trimws(gsub("Original method text:\\n", "", txt, fixed = TRUE)))) txt else "Optional. Add LC-MS method text or key items before initialization."
+    })
+
     # --- 3. Sample Info Handling ---
     sample_info_raw <- reactive({
       req(input$SampleInfo)
@@ -307,6 +372,20 @@ mod_project_init_server <- function(id, prj_init) {
           DT::datatable(prj_init$sample_info, options = list(scrollX = TRUE, pageLength = 5))
         })
       }
+      lcms_file <- file.path(prj_init$wd, "project_lcms_conditions.rds")
+      if (file.exists(lcms_file)) {
+        prj_init$lcms_conditions <- readRDS(lcms_file)
+        prj_init$lcms_conditions_text <- metminer_format_lcms_conditions(prj_init$lcms_conditions)
+      } else {
+        project_info_file <- file.path(prj_init$wd, "project_info.rds")
+        if (file.exists(project_info_file)) {
+          info <- readRDS(project_info_file)
+          if (!is.null(info$lcms_conditions)) {
+            prj_init$lcms_conditions <- info$lcms_conditions
+            prj_init$lcms_conditions_text <- metminer_format_lcms_conditions(prj_init$lcms_conditions)
+          }
+        }
+      }
 
       loaded_objects <- load_metminer_saved_objects(prj_init$wd)
       if (!is.null(prj_init$sample_info) && length(loaded_objects) > 0) {
@@ -349,6 +428,39 @@ mod_project_init_server <- function(id, prj_init) {
       restore_job(job_id)
     })
 
+    observeEvent(input$autofill_lcms, {
+      items <- metminer_extract_lcms_items(
+        method_text = input$lcms_method_text %||% "",
+        instrument_type = input$lcms_instrument %||% "auto",
+        chromatography = input$lcms_chromatography %||% "auto"
+      )
+      updateSelectInput(session, "lcms_instrument", selected = items$instrument %||% "Other")
+      updateSelectInput(session, "lcms_chromatography", selected = items$chromatography %||% "Other")
+      updateTextInput(session, "lcms_column", value = items$column %||% "")
+      updateTextInput(session, "lcms_mobile_a", value = items$mobile_phase_a %||% "")
+      updateTextInput(session, "lcms_mobile_b", value = items$mobile_phase_b %||% "")
+      updateTextInput(session, "lcms_ion_mode", value = items$ion_mode %||% "")
+      updateTextInput(session, "lcms_scan_range", value = items$scan_range %||% "")
+      updateTextInput(session, "lcms_collision", value = items$collision_energy %||% "")
+      shinyalert::shinyalert("LC-MS Conditions", "Key method items were auto-filled. Please review and edit if needed.", type = "success")
+    })
+
+    observeEvent(prj_init$lcms_conditions, {
+      items <- prj_init$lcms_conditions
+      if (is.null(items) || length(items) == 0) {
+        return()
+      }
+      updateTextAreaInput(session, "lcms_method_text", value = items$method_text %||% "")
+      updateSelectInput(session, "lcms_instrument", selected = items$instrument %||% "Other")
+      updateSelectInput(session, "lcms_chromatography", selected = items$chromatography %||% "Other")
+      updateTextInput(session, "lcms_column", value = items$column %||% "")
+      updateTextInput(session, "lcms_mobile_a", value = items$mobile_phase_a %||% "")
+      updateTextInput(session, "lcms_mobile_b", value = items$mobile_phase_b %||% "")
+      updateTextInput(session, "lcms_ion_mode", value = items$ion_mode %||% "")
+      updateTextInput(session, "lcms_scan_range", value = items$scan_range %||% "")
+      updateTextInput(session, "lcms_collision", value = items$collision_energy %||% "")
+    }, ignoreInit = TRUE)
+
     observeEvent(input$action_init, {
       # Prevent repeated initialization in the same session.
       if (wd_generated()) {
@@ -374,6 +486,18 @@ mod_project_init_server <- function(id, prj_init) {
         prj_init$wd <- full_path
         prj_init$mass_dataset_dir <- file.path(prj_init$wd, "mass_dataset")
         prj_init$data_export_dir <- file.path(prj_init$wd, "data_export")
+        prj_init$lcms_conditions <- current_lcms_items()
+        if (identical(prj_init$lcms_conditions$instrument, "auto") ||
+            identical(prj_init$lcms_conditions$chromatography, "auto")) {
+          parsed_lcms <- metminer_extract_lcms_items(
+            method_text = prj_init$lcms_conditions$method_text,
+            instrument_type = prj_init$lcms_conditions$instrument,
+            chromatography = prj_init$lcms_conditions$chromatography
+          )
+          if (identical(prj_init$lcms_conditions$instrument, "auto")) prj_init$lcms_conditions$instrument <- parsed_lcms$instrument
+          if (identical(prj_init$lcms_conditions$chromatography, "auto")) prj_init$lcms_conditions$chromatography <- parsed_lcms$chromatography
+        }
+        prj_init$lcms_conditions_text <- metminer_format_lcms_conditions(prj_init$lcms_conditions)
 
         # Create project directories.
         dir.create(prj_init$wd, showWarnings = FALSE, recursive = TRUE)
@@ -392,12 +516,14 @@ mod_project_init_server <- function(id, prj_init) {
           dplyr::mutate(batch = as.character(batch))
 
         saveRDS(prj_init$sample_info, file.path(prj_init$wd, "sample_info.rds"))
+        saveRDS(prj_init$lcms_conditions, file.path(prj_init$wd, "project_lcms_conditions.rds"))
         saveRDS(
           list(
             job_id = prj_init$job_id,
             wd = prj_init$wd,
             mass_dataset_dir = prj_init$mass_dataset_dir,
             data_export_dir = prj_init$data_export_dir,
+            lcms_conditions = prj_init$lcms_conditions,
             created_at = as.character(Sys.time())
           ),
           file.path(prj_init$wd, "project_info.rds")

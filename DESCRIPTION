@@ -27,6 +27,7 @@ Imports:
     future,
     ggplot2,
     golem,
+    htmlwidgets,
     htmltools,
     httr2,
     igraph,

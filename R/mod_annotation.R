@@ -28,10 +28,16 @@ mod_annotation_ui <- function(id) {
           width = 350,
           bg = "#f8f9fa",
 
-          tags$h6(class = "fw-bold text-primary", "1. Databases"),
+          tags$h6(class = "fw-bold text-primary", "1. Layered Databases"),
+          textInput(
+            ns("kegg_database_dir"),
+            "Layer 1 KEGG DB folder (.rda):",
+            value = "",
+            placeholder = "Temp/kegg_zma_database"
+          ),
           shinyWidgets::pickerInput(
             inputId = ns("plantcyc_database"),
-            label = "Species-specific PlantCyc database:",
+            label = "Layer 1 PlantCyc DB:",
             choices = stats::setNames(unname(plantcyc_choices), names(plantcyc_choices)),
             selected = unname(default_plantcyc),
             multiple = FALSE,
@@ -44,16 +50,16 @@ mod_annotation_ui <- function(id) {
           ),
           shinyWidgets::prettyCheckboxGroup(
             inputId = ns("public_databases"),
-            label = "Optional public MS/MS databases:",
+            label = "Layer 2 public MS2 DB:",
             choices = public_choices,
             selected = character(),
             icon = icon("check"),
             status = "success"
           ),
-          textInput(ns("local_database_dir"), "Local database folder (.rda):", value = "",
+          textInput(ns("custom_database_dir"), "Customized DB folder (.rda):", value = "",
                     placeholder = "/path/to/tidymass/database_folder"),
           tags$small(class = "text-muted d-block mb-2",
-                     "The selected PlantCyc species automatically loads paired MS1 and MS2 databases when available. Local folder may contain custom metid databaseClass .rda files."),
+                     "Four database inputs are independent: KEGG DB folder, PlantCyc DB, public MS2 DB, and customized DB. Customized DB is optional and can be empty."),
 
           tags$hr(),
           tags$h6(class = "fw-bold text-success", "2. Matching"),
@@ -146,6 +152,32 @@ mod_annotation_server <- function(id, global_data, prj_init) {
       neg = metminer_annotation_status(NULL)
     )
 
+    observe({
+      global_data$annotation_advisor_state <- list(
+        available = TRUE,
+        plantcyc_database = input$plantcyc_database %||% character(),
+        public_databases = input$public_databases %||% character(),
+        kegg_database_dir = input$kegg_database_dir %||% NA_character_,
+        custom_database_dir = input$custom_database_dir %||% NA_character_,
+        column = input$column %||% NA_character_,
+        ms1_ppm = input$ms1_ppm %||% NA_real_,
+        ms2_ppm = input$ms2_ppm %||% NA_real_,
+        rt_tolerance_sec = input$rt_tol %||% NA_real_,
+        candidate_num = input$candidate_num %||% NA_integer_,
+        threads = input$threads %||% NA_integer_,
+        input_objects = list(
+          positive_available = !is.null(get_input_obj("positive")),
+          negative_available = !is.null(get_input_obj("negative"))
+        ),
+        output_objects = list(
+          positive_available = !is.null(global_data$object_pos_annotated),
+          negative_available = !is.null(global_data$object_neg_annotated)
+        ),
+        status = list(positive = annotation_status$pos, negative = annotation_status$neg),
+        updated_at = as.character(Sys.time())
+      )
+    })
+
     # ---- Run annotation for one polarity ----
     run_annotation_polarity <- function(mode, obj_in, databases, database_labels) {
       polarity <- if (mode == "positive") "positive" else "negative"
@@ -190,7 +222,8 @@ mod_annotation_server <- function(id, global_data, prj_init) {
       tryCatch({
         databases <- metminer_collect_annotation_databases(
           builtin_ids = c(input$plantcyc_database %||% character(), input$public_databases %||% character()),
-          local_dir = input$local_database_dir
+          kegg_dir = input$kegg_database_dir,
+          custom_dir = input$custom_database_dir
         )
         database_labels <- vapply(databases, `[[`, character(1), "label")
 
@@ -223,13 +256,16 @@ mod_annotation_server <- function(id, global_data, prj_init) {
       selected_public <- input$public_databases %||% character()
       selected_plantcyc_labels <- metminer_annotation_database_labels(selected_plantcyc)
       selected_public_labels <- metminer_annotation_database_labels(selected_public)
-      local_dir <- input$local_database_dir %||% ""
-      local_text <- if (has_text(local_dir)) as.character(local_dir)[1] else "None"
+      kegg_dir <- input$kegg_database_dir %||% ""
+      kegg_text <- if (has_text(kegg_dir)) as.character(kegg_dir)[1] else "None"
+      custom_dir <- input$custom_database_dir %||% ""
+      custom_text <- if (has_text(custom_dir)) as.character(custom_dir)[1] else "None"
       paste0(
-        "Species-specific PlantCyc database: ", if (length(selected_plantcyc_labels) > 0) paste(selected_plantcyc_labels, collapse = ", ") else "None", "\n",
-        "PlantCyc MS2: automatically loaded when available\n",
-        "Optional public MS/MS databases: ", if (length(selected_public_labels) > 0) paste(selected_public_labels, collapse = ", ") else "None", "\n",
-        "Local database folder: ", local_text, "\n",
+        "Layer 1 KEGG DB folder: ", kegg_text, "\n",
+        "Layer 1 PlantCyc DB: ", if (length(selected_plantcyc_labels) > 0) paste(selected_plantcyc_labels, collapse = ", ") else "None", "\n",
+        "Layer 1 policy: KEGG/PlantCyc candidates require strict core-adduct support during filtering\n",
+        "Layer 2 public MS2 DB: ", if (length(selected_public_labels) > 0) paste(selected_public_labels, collapse = ", ") else "None", "\n",
+        "Customized DB folder: ", custom_text, "\n",
         "Column: ", toupper(input$column), "\n",
         "MS1 ppm: ", input$ms1_ppm,
         " | MS2 ppm: ", input$ms2_ppm,
