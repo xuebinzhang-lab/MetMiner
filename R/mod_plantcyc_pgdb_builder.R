@@ -21,6 +21,19 @@ mod_plantcyc_pgdb_builder_ui <- function(id) {
         textInput(ns("output_prefix"), "Output prefix", value = "plantcyc_zma", placeholder = "plantcyc_zma"),
         textInput(ns("organism"), "Organism label", value = "Zea mays (maize)"),
         textInput(ns("output_dir"), "Output directory", value = file.path("Temp", "plantcyc_pgdb_builder")),
+        tags$hr(),
+        tags$h6(class = "fw-bold text-primary", "Optional classification"),
+        checkboxInput(ns("use_classyfire"), "Add ClassyFire classification via Fiehn CFB", value = FALSE),
+        conditionalPanel(
+          condition = sprintf("input['%s']", ns("use_classyfire")),
+          numericInput(ns("classyfire_sleep"), "Sleep between requests (sec)", value = 2, min = 1, step = 0.5),
+          numericInput(ns("classyfire_retries"), "Max retries", value = 3, min = 1, max = 5, step = 1),
+          tags$small(
+            class = "text-muted d-block mb-2",
+            "MetMiner reuses the local PlantCyc classification cache first, then queries only missing InChIKeys with throttling."
+          )
+        ),
+        tags$hr(),
         actionButton(ns("build"), "Build Local Databases", icon = icon("database"), class = "btn-teal w-100 fw-bold"),
         tags$hr(),
         downloadButton(ns("download_local"), "Download local object .rda", class = "btn-outline-success w-100 mb-2"),
@@ -48,6 +61,7 @@ mod_plantcyc_pgdb_builder_ui <- function(id) {
             bslib::nav_panel("Summary", DT::dataTableOutput(ns("tbl_summary"))),
             bslib::nav_panel("Compounds", DT::dataTableOutput(ns("tbl_compounds"))),
             bslib::nav_panel("Removed Compounds", DT::dataTableOutput(ns("tbl_removed_compounds"))),
+            bslib::nav_panel("ClassyFire", DT::dataTableOutput(ns("tbl_classyfire"))),
             bslib::nav_panel("CoA Fragment Rules", DT::dataTableOutput(ns("tbl_coa_rules"))),
             bslib::nav_panel("Pathway-Compound", DT::dataTableOutput(ns("tbl_pathway_compound"))),
             bslib::nav_panel("Reactions", DT::dataTableOutput(ns("tbl_reactions")))
@@ -71,6 +85,20 @@ mod_plantcyc_pgdb_builder_server <- function(id) {
     close_progress_modal <- progress_handlers$close_progress_modal
 
     state <- reactiveValues(result = NULL, status = "Waiting for a licensed PMN/PlantCyc PGDB archive or folder.")
+
+    observeEvent(input$use_classyfire, {
+      if (!isTRUE(input$use_classyfire)) return()
+      shinyalert::shinyalert(
+        title = "Online ClassyFire Lookup",
+        text = paste(
+          "This option requires an internet connection and may take a long time for large local PGDB builds.",
+          "MetMiner will reuse the local PlantCyc classification cache first and only query missing InChIKeys from Fiehn CFB.",
+          "Requests are throttled with sleep time to avoid stressing the public server."
+        ),
+        type = "warning",
+        confirmButtonText = "OK"
+      )
+    })
 
     observeEvent(input$build, {
       shinyjs::disable("build")
@@ -104,7 +132,10 @@ mod_plantcyc_pgdb_builder_server <- function(id) {
             pgdb_dir = dirname(pgdb_data_dir),
             output_dir = output_dir,
             output_prefix = input$output_prefix %||% "plantcyc_local",
-            organism = input$organism %||% "PlantCyc local PGDB"
+            organism = input$organism %||% "PlantCyc local PGDB",
+            fetch_classyfire = isTRUE(input$use_classyfire),
+            classyfire_sleep_sec = input$classyfire_sleep %||% 2,
+            classyfire_max_retries = input$classyfire_retries %||% 3
           )
 
           update_progress_modal(90, "Refreshing tables and summary...")
@@ -120,7 +151,11 @@ mod_plantcyc_pgdb_builder_server <- function(id) {
             "MS2-eligible compounds: ", nrow(result$local_db$ms2_eligible_compounds), "\n",
             "Pathways: ", nrow(result$local_db$pathways), "\n",
             "Reactions: ", nrow(result$local_db$reactions), "\n",
-            "Pathway-compound links: ", nrow(result$local_db$pathway_compounds)
+            "Pathway-compound links: ", nrow(result$local_db$pathway_compounds), "\n",
+            "ClassyFire completed: ",
+            if (nrow(result$classyfire_classification) > 0) {
+              sum(result$classyfire_classification$classyfire_status == "completed", na.rm = TRUE)
+            } else 0
           )
           update_progress_modal(100, "Build completed.")
           close_progress_modal()
@@ -149,7 +184,14 @@ mod_plantcyc_pgdb_builder_server <- function(id) {
     })
     output$tbl_compounds <- DT::renderDataTable({
       req(state$result)
-      keep <- intersect(c("PlantCyc.ID", "KEGG.ID", "PubChem.ID", "ChEBI.ID", "Compound.name", "Formula", "mz", "INCHIKEY.ID", "Types"), colnames(state$result$local_db$compounds))
+      keep <- intersect(
+        c(
+          "PlantCyc.ID", "KEGG.ID", "PubChem.ID", "ChEBI.ID", "Compound.name",
+          "Formula", "mz", "INCHIKEY.ID", "Kingdom", "Super_class", "Class",
+          "Sub_class", "Types"
+        ),
+        colnames(state$result$local_db$compounds)
+      )
       DT::datatable(state$result$local_db$compounds[, keep, drop = FALSE], rownames = FALSE, options = list(scrollX = TRUE, pageLength = 10))
     })
     output$tbl_removed_compounds <- DT::renderDataTable({
@@ -159,6 +201,17 @@ mod_plantcyc_pgdb_builder_server <- function(id) {
         colnames(state$result$local_db$removed_compounds)
       )
       DT::datatable(state$result$local_db$removed_compounds[, keep, drop = FALSE], rownames = FALSE, options = list(scrollX = TRUE, pageLength = 10))
+    })
+    output$tbl_classyfire <- DT::renderDataTable({
+      req(state$result)
+      if (nrow(state$result$classyfire_classification) == 0) {
+        return(DT::datatable(
+          data.frame(message = "ClassyFire classification was not requested or no classification rows were generated."),
+          rownames = FALSE,
+          options = list(dom = "t")
+        ))
+      }
+      DT::datatable(state$result$classyfire_classification, rownames = FALSE, options = list(scrollX = TRUE, pageLength = 10))
     })
     output$tbl_coa_rules <- DT::renderDataTable({
       req(state$result)

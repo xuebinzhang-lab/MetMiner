@@ -11,6 +11,7 @@
 - **Refreshed built-in PlantCyc/PMN local PGDB resources** for Arabidopsis, Brassica napus, tartary buckwheat, cotton, soybean, rice, tomato, wheat, maize, and the PlantCyc reference database, including regenerated MS2 match logs and manifest files.
 - **Improved PlantCyc public MS2 matching** with InChIKey connectivity matches and formula compatibility checks that tolerate small hydrogen-count differences while requiring non-hydrogen atoms to agree.
 - **Improved PlantCyc enrichment ID recovery** by filling missing `PlantCyc.ID` values from built-in compound metadata using normalized names and mass checks before pathway enrichment.
+- **Added optional ClassyFire classification to the PlantCyc Local PGDB builder**, reusing the local PlantCyc classification cache before querying Fiehn CFB and propagating `Kingdom`, `Super_class`, `Class`, and `Sub_class` into PGDB-derived MS1/MS2 metadata.
 - **Improved Feature Network MS2 and chromatogram review** by reusing existing MS2 assignments from normalized objects, making MS2 ZIP uploads optional when spectra are already attached, and allowing users to choose local raw files for EIC extraction.
 
 *Co-authored with Codex (OpenAI GPT-5) and Shawn*

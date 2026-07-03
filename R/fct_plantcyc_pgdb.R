@@ -291,6 +291,9 @@ metminer_pgdb_make_local_object <- function(pgdb_dir) {
 metminer_pgdb_spectra_info <- function(plantcyc_db) {
   x <- plantcyc_db$compounds
   x <- x[!has_text(x$filter_reason), , drop = FALSE]
+  get_col <- function(name, fallback = NA_character_) {
+    if (name %in% colnames(x)) x[[name]] else rep(fallback, nrow(x))
+  }
   data.frame(
     Lab.ID = x$PlantCyc.ID,
     PlantCyc.ID = x$PlantCyc.ID,
@@ -317,6 +320,14 @@ metminer_pgdb_spectra_info <- function(plantcyc_db) {
     Types = x$Types,
     Citations = x$Citations,
     Comment = x$Comment,
+    Kingdom = get_col("Kingdom"),
+    Super_class = get_col("Super_class"),
+    Class = get_col("Class"),
+    Sub_class = get_col("Sub_class"),
+    direct_parent = get_col("direct_parent"),
+    molecular_framework = get_col("molecular_framework"),
+    classyfire_status = get_col("classyfire_status"),
+    classyfire_source = get_col("classyfire_source"),
     source = "PlantCyc/PMN local PGDB",
     stringsAsFactors = FALSE
   )
@@ -339,7 +350,7 @@ metminer_pgdb_build_ms1_database <- function(plantcyc_db, version = as.character
 }
 
 metminer_pgdb_as_plantcyc_compounds <- function(compounds) {
-  data.frame(
+  out <- data.frame(
     compound_id = compounds$PlantCyc.ID,
     compound_name = compounds$Compound.name,
     synonyms = compounds$Synonyms,
@@ -355,6 +366,31 @@ metminer_pgdb_as_plantcyc_compounds <- function(compounds) {
     source = "PlantCyc/PMN local PGDB",
     stringsAsFactors = FALSE
   )
+  for (col in metminer_plantcyc_classyfire_cols()) {
+    if (col %in% colnames(compounds)) {
+      out[[col]] <- compounds[[col]]
+    }
+  }
+  out
+}
+
+metminer_pgdb_attach_classyfire_columns <- function(compounds, classified_compounds) {
+  cols <- metminer_plantcyc_classyfire_cols()
+  if (nrow(compounds) == 0 || nrow(classified_compounds) == 0) {
+    for (col in cols) {
+      if (!col %in% colnames(compounds)) compounds[[col]] <- NA_character_
+    }
+    return(compounds)
+  }
+  hit <- match(compounds$PlantCyc.ID, classified_compounds$compound_id)
+  for (col in cols) {
+    if (!col %in% colnames(compounds)) compounds[[col]] <- NA_character_
+    value <- rep(NA_character_, nrow(compounds))
+    ok <- !is.na(hit) & col %in% colnames(classified_compounds)
+    value[ok] <- classified_compounds[[col]][hit[ok]]
+    compounds[[col]] <- value
+  }
+  compounds
 }
 
 metminer_pgdb_build_ms2_database <- function(plantcyc_db,
@@ -412,10 +448,35 @@ metminer_pgdb_build_pathway_database <- function(plantcyc_db, organism = "PlantC
 metminer_pgdb_build_outputs <- function(pgdb_dir,
                                         output_dir,
                                         output_prefix = "plantcyc_local",
-                                        organism = "PlantCyc local PGDB") {
+                                        organism = "PlantCyc local PGDB",
+                                        fetch_classyfire = FALSE,
+                                        classyfire_cache_dir = file.path(output_dir, "classyfire_cache"),
+                                        classyfire_sleep_sec = 2,
+                                        classyfire_max_retries = 3,
+                                        classyfire_local_cache_file = metminer_plantcyc_classyfire_cache_file()) {
   output_prefix <- metminer_plantcyc_sanitize_prefix(output_prefix)
   dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
   local_db <- metminer_pgdb_make_local_object(pgdb_dir)
+
+  classyfire_result <- NULL
+  classyfire_local_cache_hits <- 0
+  classyfire_cfb_queries <- 0
+  if (isTRUE(fetch_classyfire)) {
+    classified <- metminer_add_classyfire_to_compounds(
+      clean_compounds = metminer_pgdb_as_plantcyc_compounds(local_db$compounds),
+      cache_dir = classyfire_cache_dir,
+      sleep_sec = classyfire_sleep_sec,
+      max_retries = classyfire_max_retries,
+      local_cache_file = classyfire_local_cache_file
+    )
+    local_db$compounds <- metminer_pgdb_attach_classyfire_columns(local_db$compounds, classified$compounds)
+    local_db$ms2_eligible_compounds <- metminer_pgdb_attach_classyfire_columns(local_db$ms2_eligible_compounds, classified$compounds)
+    local_db$removed_compounds <- metminer_pgdb_attach_classyfire_columns(local_db$removed_compounds, classified$compounds)
+    classyfire_result <- classified
+    classyfire_local_cache_hits <- classified$local_cache_hits
+    classyfire_cfb_queries <- classified$cfb_queries
+  }
+
   ms1_db <- metminer_pgdb_build_ms1_database(local_db)
   ms2_result <- metminer_pgdb_build_ms2_database(local_db)
   ms2_db <- ms2_result$database
@@ -433,6 +494,11 @@ metminer_pgdb_build_outputs <- function(pgdb_dir,
   utils::write.table(ms2_db@spectra.info, file.path(output_dir, paste0(output_prefix, "_ms2_spectra_info.tsv")), sep = "\t", quote = FALSE, row.names = FALSE, na = "")
   utils::write.table(ms2_result$match_log, file.path(output_dir, paste0(output_prefix, "_ms2_match_log.tsv")), sep = "\t", quote = FALSE, row.names = FALSE, na = "")
   utils::write.table(ms2_result$unmatched_compounds, file.path(output_dir, paste0(output_prefix, "_ms2_unmatched_compounds.tsv")), sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+  if (!is.null(classyfire_result)) {
+    utils::write.table(classyfire_result$classification, file.path(output_dir, paste0(output_prefix, "_classyfire_classification.tsv")), sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+    utils::write.table(local_db$compounds, file.path(output_dir, paste0(output_prefix, "_compound_metadata_with_classyfire.tsv")), sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+    file.copy(classyfire_result$local_cache_file, file.path(output_dir, paste0(output_prefix, "_classyfire_local_cache_snapshot.tsv")), overwrite = TRUE)
+  }
 
   removed <- local_db$removed_compounds
   positive_spectra <- sum(vapply(ms2_db@spectra.data$Spectra.positive, length, integer(1)))
@@ -461,7 +527,12 @@ metminer_pgdb_build_outputs <- function(pgdb_dir,
       "coa_retained_for_ms2",
       "pathways",
       "reactions",
-      "pathway_compound_links"
+      "pathway_compound_links",
+      "classyfire_completed",
+      "classyfire_not_found",
+      "classyfire_failed",
+      "classyfire_local_cache_hits",
+      "classyfire_cfb_queries"
     ),
     count = c(
       nrow(local_db$compounds),
@@ -478,7 +549,12 @@ metminer_pgdb_build_outputs <- function(pgdb_dir,
             !has_text(removed$ms2_filter_reason), na.rm = TRUE),
       nrow(local_db$pathways),
       nrow(local_db$reactions),
-      nrow(local_db$pathway_compounds)
+      nrow(local_db$pathway_compounds),
+      if (!is.null(classyfire_result)) sum(classyfire_result$classification$classyfire_status == "completed", na.rm = TRUE) else 0,
+      if (!is.null(classyfire_result)) sum(classyfire_result$classification$classyfire_status %in% c("not_found", "no_data"), na.rm = TRUE) else 0,
+      if (!is.null(classyfire_result)) sum(classyfire_result$classification$classyfire_status == "failed", na.rm = TRUE) else 0,
+      classyfire_local_cache_hits,
+      classyfire_cfb_queries
     ),
     stringsAsFactors = FALSE
   )
@@ -488,6 +564,7 @@ metminer_pgdb_build_outputs <- function(pgdb_dir,
     ms1_db = ms1_db,
     ms2_db = ms2_db,
     pathway_db = pathway_db,
+    classyfire_classification = if (!is.null(classyfire_result)) classyfire_result$classification else data.frame(),
     summary = summary,
     output_dir = output_dir,
     output_prefix = output_prefix,
@@ -503,7 +580,10 @@ metminer_pgdb_build_outputs <- function(pgdb_dir,
       coa_fragment_rules = file.path(output_dir, paste0(output_prefix, "_coa_fragment_rules.tsv")),
       ms2_spectra_info = file.path(output_dir, paste0(output_prefix, "_ms2_spectra_info.tsv")),
       ms2_match_log = file.path(output_dir, paste0(output_prefix, "_ms2_match_log.tsv")),
-      ms2_unmatched_compounds = file.path(output_dir, paste0(output_prefix, "_ms2_unmatched_compounds.tsv"))
+      ms2_unmatched_compounds = file.path(output_dir, paste0(output_prefix, "_ms2_unmatched_compounds.tsv")),
+      classyfire_classification = if (!is.null(classyfire_result)) file.path(output_dir, paste0(output_prefix, "_classyfire_classification.tsv")) else NULL,
+      compound_metadata_with_classyfire = if (!is.null(classyfire_result)) file.path(output_dir, paste0(output_prefix, "_compound_metadata_with_classyfire.tsv")) else NULL,
+      classyfire_local_cache_snapshot = if (!is.null(classyfire_result)) file.path(output_dir, paste0(output_prefix, "_classyfire_local_cache_snapshot.tsv")) else NULL
     )
   )
 }

@@ -190,6 +190,31 @@ by matching normalized compound names and checking precursor mass. Rows filled
 this way receive `PlantCyc.ID.source` and `PlantCyc.ID.matched_name` fields so
 the recovery can be audited.
 
+## Optional ClassyFire Classification
+
+Both PlantCyc SmartTable construction and PlantCyc Local PGDB construction can
+optionally add ClassyFire classification through Fiehn CFB. This option is
+off by default because it requires an internet connection and can take a long
+time for large species databases.
+
+When enabled, MetMiner first reuses the local PlantCyc classification cache and
+only queries missing InChIKeys. Classification fields are propagated into the
+generated compound metadata and MS1/MS2 `spectra.info` tables:
+
+- `Kingdom`
+- `Super_class`
+- `Class`
+- `Sub_class`
+- `direct_parent`
+- `molecular_framework`
+- `classyfire_status`
+- `classyfire_source`
+
+For Local PGDB builds, the output folder also receives
+`<prefix>_classyfire_classification.tsv`,
+`<prefix>_compound_metadata_with_classyfire.tsv`, and
+`<prefix>_classyfire_local_cache_snapshot.tsv` when classification is enabled.
+
 ## Recommended Review
 
 After construction, check the `Summary` and `MS2 Match Log` tabs:
