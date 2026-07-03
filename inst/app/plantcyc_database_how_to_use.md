@@ -128,10 +128,13 @@ The MS2 database is built by extracting public spectra from `massdbbuildin`:
 Public spectra are linked to PlantCyc compounds using conservative matching:
 
 1. exact InChIKey match;
-2. exact SMILES match plus formula and mass validation;
-3. normalized compound name or synonym match plus formula and mass validation.
+2. InChIKey connectivity match plus formula and mass validation;
+3. exact SMILES match plus formula and mass validation;
+4. normalized compound name or synonym match plus formula and mass validation.
 
 Formula-plus-mass alone is not used as an independent match because it is too ambiguous for metabolite annotation.
+
+For non-exact InChIKey matches, formula validation allows a small hydrogen-count difference while requiring all non-hydrogen atoms to agree. This improves practical coverage for tautomer, protonation, or representation differences without allowing unrelated formulas to pass.
 
 CoA and acyl-CoA derivatives are retained as MS2-eligible candidates. A CoA-related annotation should be accepted only when the precursor mass is supported by MS/MS evidence, especially characteristic CoA backbone fragments. The toolkit also writes `plantcyc_coa_fragment_rules.tsv` as a diagnostic-fragment rule table for downstream review.
 
@@ -159,6 +162,33 @@ The toolkit writes files to the selected output folder using the output prefix d
 - `<prefix>_database_summary.tsv`
 
 The MS1 and MS2 `.rda` files can be used as local metID databases in the MetMiner annotation module. The pathway `.rda` file is a `metpath::pathway_database` object for pathway enrichment using PlantCyc compound IDs.
+
+## Built-in PlantCyc/PMN Local PGDB Resources
+
+MetMiner also ships prebuilt PlantCyc/PMN local PGDB resources for several
+plant databases. The bundled resources include MS1 databases, MS2 databases,
+pathway databases, local object files, MS2 spectra information, MS2 match logs,
+unmatched-compound reports, and a manifest used by annotation and enrichment
+helpers.
+
+Current bundled prefixes include:
+
+- `plantcyc_ath` for Arabidopsis;
+- `plantcyc_bna` for Brassica napus;
+- `plantcyc_ftt` for tartary buckwheat;
+- `plantcyc_ghi` for cotton;
+- `plantcyc_gma` for soybean;
+- `plantcyc_osa` for rice;
+- `plantcyc_sly` for tomato;
+- `plantcyc_tae` for wheat;
+- `plantcyc_zma` for maize;
+- `plantcyc_ref` for the PlantCyc reference database.
+
+When a built-in PlantCyc pathway database is used for enrichment, MetMiner can
+recover missing `PlantCyc.ID` values from the corresponding compound metadata
+by matching normalized compound names and checking precursor mass. Rows filled
+this way receive `PlantCyc.ID.source` and `PlantCyc.ID.matched_name` fields so
+the recovery can be audited.
 
 ## Recommended Review
 

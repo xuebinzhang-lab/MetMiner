@@ -31,6 +31,8 @@ For a queried compound name or feature ID, MetMiner collects:
 - top MS2 fragment summaries when spectra are available;
 - feature-network roles, local edges, parent candidates, and recurrent-ion
   status;
+- database source labels and source type, such as KEGG, PlantCyc, public MS2,
+  or custom library;
 - user-supplied LC-MS conditions, including instrument, column, mobile phases,
   gradient, ion source, and collision energy;
 - optional literature evidence from paper-search MCP.
@@ -51,21 +53,25 @@ The reviewer follows the same logic expected from a human LC-MS analyst:
 2. Use public MS2 libraries as the default Layer 2 evidence for validating
    Layer 1 candidates and for supplementing real metabolites that may be absent
    from reaction databases.
-3. Treat local/custom standard libraries as optional enhancement evidence, not
+3. Treat PlantCyc and KEGG as distinct identifier namespaces. A PlantCyc
+   pathway or reaction candidate is not automatically interchangeable with a
+   KEGG candidate unless an explicit mapping or shared spectral evidence is
+   present.
+4. Treat local/custom standard libraries as optional enhancement evidence, not
    as a required input. When present, they can support the highest confidence
    only if RT, precursor, and MS2 evidence are available.
-4. Prioritize higher annotation levels and stronger metID scores, but do not
+5. Prioritize higher annotation levels and stronger metID scores, but do not
    treat mass matching alone as confirmation.
-5. Check whether the selected feature is locally supported by co-eluting
+6. Check whether the selected feature is locally supported by co-eluting
    isotope, adduct, or ISF relationships.
-6. Inspect whether the same compound name or same m/z appears at multiple
+7. Inspect whether the same compound name or same m/z appears at multiple
    distant RTs.
-7. Treat resolved recurrent ISFs and suspected interference features as
+8. Treat resolved recurrent ISFs and suspected interference features as
    low-confidence annotation candidates unless a local parent explains them.
-8. Compare positive and negative mode evidence when both are present.
-9. Use MS2 fragments as supporting or conflicting evidence, especially when
+9. Compare positive and negative mode evidence when both are present.
+10. Use MS2 fragments as supporting or conflicting evidence, especially when
    diagnostic fragments or neutral-loss patterns are available.
-10. Use literature only as biological context; literature cannot override weak
+11. Use literature only as biological context; literature cannot override weak
    spectral or chromatographic evidence.
 
 The first Review action asks for a structured report with these sections:

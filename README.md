@@ -6,7 +6,7 @@
 
 **MetMiner V2** is a next-generation, open-source R platform designed to address the most critical bottlenecks in untargeted LC-MS metabolomics: high false-positive rates caused by in-source fragmentation (ISF), feature redundancy, workflow fragility, and weak biological context in spectral annotation.
 
-V2 combines a feature-network deconvolution workflow with an **AI-assisted annotation reviewer**. The reviewer does not replace spectral validation. Instead, it packages MetMiner evidence into a structured bundle and asks a user-configured LLM to reason over annotation level, adduct evidence, MS1/MS2 data, feature-network roles, recurrent-ion status, LC-MS conditions, and optional paper-search evidence.
+V2 combines a feature-network deconvolution workflow with an **AI-assisted annotation reviewer** and a global workflow-aware **MetMiner Bot**. These AI tools do not replace spectral validation. Instead, they package MetMiner evidence into structured bundles and ask a user-configured LLM to reason over annotation level, adduct evidence, MS1/MS2 data, feature-network roles, recurrent-ion status, LC-MS conditions, sample design, downstream statistics, enrichment context, and optional paper-search evidence.
 
 ## ✨ Key Innovations
 
@@ -15,13 +15,23 @@ MetMiner includes a chat-style AI Annotation Reviewer that can connect to OpenAI
 
 The reviewer is guarded by prompt rules: it must judge annotations from the evidence bundle, treat metID adducts as database/adduct-dictionary evidence rather than network-derived relationships, and avoid inventing papers or DOI values. Optional paper-search MCP support can be triggered by a checkbox or chat tags such as `@agent` and `@paper`; citations are restricted to retrieved paper-search records.
 
-### 2. Data-Driven ISF Deconvolution Engine
+### 2. Global MetMiner Bot Advisors
+The floating MetMiner Bot includes module-aware advisors for import, noise removal, outlier review, missing values, normalization, feature networking, annotation, annotation filtering, differential analysis, enrichment, and database construction. Advisors read the active Shiny state, project objects, selected features/pathways, and `sample_info` metadata before answering parameter questions.
+
+The Bot now profiles `sample_info` as an extensible experimental-design table. It summarizes user-provided columns, common level combinations, singleton strata, and heterogeneous designs so downstream guidance can distinguish global missingness from group-specific or attribute-specific patterns.
+
+### 3. Data-Driven ISF Deconvolution Engine
 Complex plant secondary metabolites (e.g., flavonoids, glycosides) frequently undergo source-induced fragmentation, leading to massive feature redundancy.
 * **Built-in Plant ISF Dictionary:** Trained via Kernel Density Estimation (KDE) on a massive cohort (>800 QC samples across 10+ plant species) to capture empirical, high-frequency neutral losses (NL) and charged fragments.
 * **Spatiotemporal Co-elution Algorithm:** Identifies and collapses highly correlated ($r > 0.95$), co-eluting ISF features into their true precursor ions.
 * **Custom Training Pipeline:** Includes a standalone Snakemake workflow for users to train instrument-specific ISF dictionaries from their own QC data.
 
-### 3. Fail-Safe UI & Quarto Automated Reporting
+### 4. PlantCyc-Aware Annotation and Enrichment
+MetMiner ships species-specific PlantCyc/PMN local PGDB resources for Arabidopsis, Brassica napus, tartary buckwheat, cotton, soybean, rice, tomato, wheat, maize, and the PlantCyc reference database. Built-in MS1, MS2, pathway, and manifest objects can be used for metID annotation and PlantCyc compound-ID pathway enrichment.
+
+The PlantCyc MS2 builder links public spectra with exact InChIKey matches, InChIKey connectivity plus formula/mass validation, SMILES plus formula/mass validation, and conservative name/synonym matches. Formula compatibility allows small hydrogen-count differences while requiring non-hydrogen atoms to agree, which improves coverage without relying on formula-plus-mass alone.
+
+### 5. Fail-Safe UI & Quarto Automated Reporting
 * **Robust Monitoring:** Shiny-side validation, progress feedback, and chat-native asynchronous status indicators for long-running annotation review tasks.
 * **Automated Quarto Reports:** Generates standardized, publication-ready HTML/PDF reports spanning *Raw Data QC*, *Data Cleaning*, and *Downstream Mining*.
 
@@ -41,7 +51,7 @@ MetMiner imports raw MS1 data through `massprocesser::process_data()`, using the
 After peak picking, MetMiner supports blank-informed intensity masking. Blank samples estimate feature-specific background, and non-blank sample intensities that do not exceed this background are converted to missing values before downstream MV/RSD filters. This step is complementary to XCMS `noise`, `prefilter`, and `snthresh` thresholds rather than a replacement for them.
 
 ### Feature Network Analysis and Visualization
-The Feature Network module separates RT-local ion-form relationships from cross-RT recurrent fragment interpretation. Users can build isotope, adduct, and ISF networks inside an RT tolerance window, inspect repeated same-m/z ions across retention times in a recurrent-ion layer, and use both layers during annotation filtering. Selecting a real feature node displays the RT-local MS1 lollipop spectrum, optional raw chromatograms from Tidymass/XCMS intermediate `xdata`, and an MS2 lollipop spectrum with diagnostic fragment and neutral-loss annotations. Final non-redundant annotation tables now carry recurrent-ion audit fields so resolved recurrent ISFs can be removed while unresolved repeated ions remain reviewable.
+The Feature Network module separates RT-local ion-form relationships from cross-RT recurrent fragment interpretation. Users can build isotope, adduct, and ISF networks inside an RT tolerance window, inspect repeated same-m/z ions across retention times in a recurrent-ion layer, and use both layers during annotation filtering. Selecting a real feature node displays the RT-local MS1 lollipop spectrum, optional raw chromatograms from Tidymass/XCMS intermediate `xdata`, and an MS2 lollipop spectrum with diagnostic fragment and neutral-loss annotations. Existing MS2 assignments in normalized `mass_dataset` objects are reused directly; an MS2 ZIP upload is optional when spectra are already attached. Final non-redundant annotation tables now carry recurrent-ion audit fields so resolved recurrent ISFs can be removed while unresolved repeated ions remain reviewable.
 
 ### AI Annotation Reviewer
 The AI Annotation Reviewer provides a ChatGPT-like interface inside Shiny. Users choose an LLM provider, model, endpoint, language, API key, temperature, optional paper-search sources, and LC-MS conditions in the sidebar. Review requests collect annotation and feature-network evidence for a compound or feature query, while follow-up messages ask focused questions against the latest evidence bundle.
@@ -53,7 +63,15 @@ Implementation details are documented in `inst/app/ai_annotation_principles.md`.
 ### MetMiner Bot Module Advisors
 MetMiner Bot now includes module-aware advisor commands that can read the active Shiny state and project objects before answering parameter questions. Users can choose an advisor from the Bot command menu or type tags such as `@data-import-advisor`, `@noise-filter-advisor`, `@outlier-advisor`, `@missing-value-advisor`, `@normalization-advisor`, `@feature-network-advisor`, `@annotation-advisor`, `@annotation-filter-advisor`, `@differential-advisor`, `@enrichment-advisor`, and `@database-advisor`.
 
-Each advisor packages current UI parameters, available positive/negative `mass_dataset` objects, summarized sample/feature missingness, annotation/filtering results, differential and enrichment tables, or KEGG/PlantCyc database status as relevant to that module. The Bot uses this context to give conservative, evidence-grounded recommendations, for example whether KNN imputation parameters are reasonable, whether a PCA outlier should be removed, whether volcano-plot thresholds are too permissive, or why PlantCyc enrichment lacks query IDs.
+Each advisor packages current UI parameters, available positive/negative `mass_dataset` objects, summarized sample/feature missingness, annotation/filtering results, differential and enrichment tables, KEGG/PlantCyc database status, and sample-design summaries as relevant to that module. The Bot uses this context to give conservative, evidence-grounded recommendations, for example whether KNN imputation parameters are reasonable, whether a PCA outlier should be removed, whether volcano-plot thresholds are too permissive, whether missingness is group-specific, or why PlantCyc enrichment lacks query IDs.
+
+Implementation details are documented in `inst/app/global_ai_bot_advisors.md`.
+
+### Sample Metadata Harmonization
+`metminer_harmonize_sample_info()` overlays project-level `sample_info` metadata onto imported `mass_dataset` objects by matching `sample_id` and raw-file names. This keeps group, batch, injection order, tissue, time, treatment, and custom metadata columns consistent across raw-data, table, and RDA import paths.
+
+### Built-in PlantCyc Databases
+The annotation and enrichment modules can use built-in PlantCyc/PMN local PGDB resources for common plant species. PlantCyc annotation tables now carry database source type, database label, annotation layer, evidence scope, core-adduct status, and confidence fields so downstream filtering, AI review, and pathway enrichment can separate genome-informed candidates from spectral evidence.
 
 ---
 
@@ -77,8 +95,14 @@ graph TD
     J[(paper-search MCP)] -. optional literature .-> H
     I --> K[Annotation Credibility Review]
     end
+
+    subgraph 3. Global MetMiner Bot
+    S[Shiny State + sample_info] --> T[Module Advisor Context]
+    T --> U((User-selected LLM))
+    U --> V[Workflow Parameter Guidance]
+    end
     
-    subgraph 3. Quarto Reporting System
+    subgraph 4. Quarto Reporting System
     K --> M{Report Generator}
     M --> N[Raw Data QC Report.pdf]
     M --> O[Data Cleaning Report.pdf]
@@ -111,6 +135,7 @@ BiocManager::install(c("xcms", "mzR"))
 - [ ] End-to-end test the full raw-data to annotation-review workflow on benchmark maize, cotton, and Arabidopsis datasets.
 - [ ] Add regression tests for feature-network recurrent-ion detection and non-redundant annotation filtering.
 - [ ] Add smoke tests for AI reviewer evidence-bundle construction without requiring live API keys.
+- [ ] Add smoke tests for Global Bot sample-design summaries and module-advisor context construction.
 - [ ] Improve paper-search MCP installation detection and provider-specific setup guidance.
 
 ### Annotation and network refinement
@@ -120,7 +145,7 @@ BiocManager::install(c("xcms", "mzR"))
 
 ### Reporting and documentation
 - [ ] Extend Quarto reports to include feature-network audit summaries and AI reviewer outputs.
-- [ ] Build user-facing vignettes for feature-network annotation filtering, paper-search setup, and AI-assisted review.
+- [ ] Build user-facing vignettes for feature-network annotation filtering, paper-search setup, AI-assisted review, Global Bot advisors, and PlantCyc local PGDB enrichment.
 
 ---
 

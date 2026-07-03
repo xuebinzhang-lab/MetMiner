@@ -2,6 +2,21 @@
 
 ## v0.1.0.9005 / app 2.0.2 (development)
 
+### 2026-07-03 — Global Bot sample-design context and PlantCyc database refresh
+
+- **Expanded Global MetMiner Bot advisor context** with sample-design profiling from project `sample_info`, including user-defined metadata columns, level summaries, inferred design combinations, singleton strata, and heterogeneity warnings.
+- **Improved advisor prompts for heterogeneous experiments**, so data import, missing-value, outlier, normalization, and downstream advisors distinguish global summaries from group-specific or attribute-specific patterns and keep single-ion-mode acquisition failures in scope.
+- **Exported `metminer_harmonize_sample_info()`** and added its help page, allowing project-level sample metadata to be overlaid onto imported `mass_dataset` objects across raw-data, table, and RDA import paths.
+- **Refined multi-database annotation handling** by normalizing empty and non-empty annotation tables, preserving database source labels, ranking candidates across databases, and adding database source type, annotation layer, evidence scope, core-adduct status, and confidence fields.
+- **Refreshed built-in PlantCyc/PMN local PGDB resources** for Arabidopsis, Brassica napus, tartary buckwheat, cotton, soybean, rice, tomato, wheat, maize, and the PlantCyc reference database, including regenerated MS2 match logs and manifest files.
+- **Improved PlantCyc public MS2 matching** with InChIKey connectivity matches and formula compatibility checks that tolerate small hydrogen-count differences while requiring non-hydrogen atoms to agree.
+- **Improved PlantCyc enrichment ID recovery** by filling missing `PlantCyc.ID` values from built-in compound metadata using normalized names and mass checks before pathway enrichment.
+- **Improved Feature Network MS2 and chromatogram review** by reusing existing MS2 assignments from normalized objects, making MS2 ZIP uploads optional when spectra are already attached, and allowing users to choose local raw files for EIC extraction.
+
+*Co-authored with Codex (OpenAI GPT-5) and Shawn*
+
+---
+
 ### 2026-05-24 — MetMiner Bot module advisors and downstream workflow polish
 
 - **Added module-aware MetMiner Bot advisors** for data import, noise filtering, outlier review, missing-value imputation, normalization, feature networking, annotation, annotation filtering, differential analysis, enrichment, and database construction.
