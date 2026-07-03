@@ -247,6 +247,7 @@ metminer_global_ai_parameter_corpus <- function() {
         "Percentile Fallback is used only by the distribution masking method when a clear intensity antimode is not found.",
         "Apply Blank Ratio Filter is optional. Blank Sample Label and Reference Sample Label are class values; Ratio Threshold keeps features with sample_mean / blank_mean >= threshold, while blank_mean = 0 or undefined ratios are kept.",
         "QC Missing Ratio Threshold keeps features with QC missingness at or below the threshold. Group Missing Ratio Threshold keeps features present enough in at least one non-QC group.",
+        "For heterogeneous experimental designs, sample_info may contain user-defined biological or technical attribute columns beyond class, group, and batch. Missingness should be interpreted within relevant sample strata when possible, because tissue-, genotype-, time-, treatment-, or material-specific absence can be biologically meaningful.",
         "Apply RSD Filter controls the QC RSD step. QC RSD Threshold percent removes features with rsd >= threshold when more than one QC sample is available."
       ),
       paste(
@@ -254,6 +255,8 @@ metminer_global_ai_parameter_corpus <- function() {
         "Detection Method switches between Automatic and Manual modes.",
         "Automatic mode exposes NA percent cutoff, SD fold change, MAD fold change, and PCA distance p-value. Higher NA, SD, or MAD thresholds are more permissive; lower PCA distance p-values are stricter for multivariate outliers.",
         "Manual mode exposes separate positive and negative outlier sample selectors.",
+        "For outlier review, POS/NEG consistency is useful but not definitive. If positive and negative ion modes were acquired separately, one mode can fail because of injection or acquisition issues such as bubbles, low sample volume, evaporation, vial depletion, needle pickup failure, clogging, or source instability while the other mode remains normal.",
+        "A normal opposite ion mode weakens whole-sample failure evidence but does not rule out a single-mode run failure. High missingness should be interpreted with total intensity, peak count when available, injection order, nearby QC behavior, raw TIC/BPC, and replicate behavior within sample_info-defined strata.",
         "PCA controls such as Color By, Label By, Scale Data, Point Size, Point Alpha, Width, and Height affect plots and downloads only; they do not change which samples are removed unless the user selects samples manually."
       ),
       paste(
@@ -262,7 +265,9 @@ metminer_global_ai_parameter_corpus <- function() {
         "KNN k controls neighbor count; rowmax and colmax limit rows or columns with too much missingness; maxp controls block size for high-dimensional KNN imputation; RNG Seed is passed as rng.seed.",
         "Random Forest parameters are maxiter, ntree, and decreasing order.",
         "BPCA, PPCA, and SVD Impute share nPcs. BPCA additionally uses maxSteps and threshold.",
-        "Mean, median, zero, and minimum imputation have no additional Shiny parameters."
+        "Mean, median, zero, and minimum imputation have no additional Shiny parameters.",
+        "In heterogeneous sample designs, high global missingness can reflect group-specific metabolite presence rather than only technical failure. Prefer checking missingness by user-defined sample_info attributes before broad imputation or removal.",
+        "If KNN or another imputation method fails because a sample exceeds a missingness threshold, do not classify the sample from missing rate alone. Consider whether the pattern is shared by biological replicates or sample strata, whether it affects one or both ion modes, and whether single-mode acquisition failure is plausible."
       ),
       paste(
         "Normalization parameters control signal correction across samples.",
@@ -272,6 +277,7 @@ metminer_global_ai_parameter_corpus <- function() {
         "PQN reference chooses median or mean reference spectrum.",
         "Integration Method chooses qc_mean, qc_median, subject_mean, or subject_median for masscleaner::integrate_data.",
         "Integration is conditional: it runs only when sample_info has a batch column with more than one unique batch. It is skipped for single-batch data or missing batch metadata.",
+        "QC-based SVR or LOESS normalization should be interpreted with the sample_info design. Strong biological heterogeneity and high group-specific missingness can make QC-trend correction less stable for sparse features; positive scaling methods such as PQN, total, median, or mean are less likely to create non-positive intensities.",
         "PCA and RSD controls in this module, including Log2 + Scale, Color By, Point Alpha, Point Size, RSD Cutoff, Descending, Width, and Height, are plot/download controls."
       ),
       paste(

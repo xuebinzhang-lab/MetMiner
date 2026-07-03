@@ -555,13 +555,14 @@ mod_ai_annotation_server <- function(id, global_data, prj_init) {
         language = language,
         mode = "review"
       )
+      llm_caller <- metminer_ai_llm_caller()
 
       # Async LLM call
       fut <- tryCatch(future::future(
-        call_llm_async(provider, model, api_key, base_url, temperature, messages),
+        llm_caller(provider, model, api_key, base_url, temperature, messages),
         packages = c("httr2", "jsonlite"),
         globals = list(
-          call_llm_async = call_llm_async,
+          llm_caller = llm_caller,
           provider = provider,
           model = model,
           api_key = api_key,
@@ -684,13 +685,14 @@ mod_ai_annotation_server <- function(id, global_data, prj_init) {
         language = language,
         mode = "chat"
       )
+      llm_caller <- metminer_ai_llm_caller()
 
       # Async LLM call
       fut <- tryCatch(future::future(
-        call_llm_async(provider, model, api_key, base_url, temperature, messages),
+        llm_caller(provider, model, api_key, base_url, temperature, messages),
         packages = c("httr2", "jsonlite"),
         globals = list(
-          call_llm_async = call_llm_async,
+          llm_caller = llm_caller,
           provider = provider,
           model = model,
           api_key = api_key,
@@ -771,6 +773,21 @@ run_paper_search_for_request <- function(input, chat, query, trigger_text = "") 
     ))
   }
   paper_search
+}
+
+metminer_ai_llm_caller <- function() {
+  envs <- list(
+    parent.frame(),
+    environment(),
+    globalenv()
+  )
+  for (env in envs) {
+    fun <- tryCatch(get("call_llm_async", envir = env, mode = "function", inherits = TRUE), error = function(e) NULL)
+    if (is.function(fun)) {
+      return(fun)
+    }
+  }
+  stop("Internal LLM caller is not available. Please restart the MetMiner app after updating the code.", call. = FALSE)
 }
 
 call_llm_async <- function(provider, model, api_key, base_url, temperature, messages) {

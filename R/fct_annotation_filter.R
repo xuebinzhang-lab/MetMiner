@@ -137,6 +137,7 @@ metminer_annotation_filter_best_candidates <- function(annotation_table,
   candidates <- metminer_prepare_annotation_candidates(annotation_table)
   if (nrow(candidates) == 0) return(data.frame())
   candidates <- metminer_add_annotation_layer_columns(candidates, mode, adduct_advice)
+  candidates <- metminer_fill_same_compound_annotation_ids(candidates)
   candidates <- candidates[candidates$strict_genome_adduct_pass %in% TRUE, , drop = FALSE]
   if (nrow(candidates) == 0) return(data.frame())
 
@@ -146,6 +147,7 @@ metminer_annotation_filter_best_candidates <- function(annotation_table,
     if (!is.null(validated) && nrow(validated) > 0) {
       candidates <- validated
       candidates <- metminer_add_annotation_layer_columns(candidates, mode, adduct_advice)
+      candidates <- metminer_fill_same_compound_annotation_ids(candidates)
       candidates <- candidates[candidates$strict_genome_adduct_pass %in% TRUE, , drop = FALSE]
       if (nrow(candidates) == 0) return(data.frame())
     } else {

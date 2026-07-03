@@ -288,7 +288,7 @@ mod_global_ai_bot_ui <- function(id) {
     ", ns("panel"), ns("resize_handle"), ns("open_bot"), ns("close_bot")))),
     div(
       id = ns("global_ai_root"),
-      actionButton(ns("open_bot"), label = NULL, icon = bsicons::bs_icon("robot", size = "1.45rem"),
+      actionButton(ns("open_bot"), label = NULL, icon = icon("robot"),
                    class = "global-ai-launcher", title = "Open MetMiner Bot"),
       div(
         id = ns("panel"),
@@ -1760,6 +1760,7 @@ metminer_global_ai_project_context <- function(global_data, prj_init) {
         mass_dataset_dir = prj_init$mass_dataset_dir %||% NA_character_,
         sample_info_rows = nrow(sample_info),
         sample_info_columns = colnames(sample_info),
+        sample_design = metminer_global_ai_sample_design_summary(sample_info),
         lcms_conditions = prj_init$lcms_conditions %||% list(),
         lcms_conditions_text = prj_init$lcms_conditions_text %||% NA_character_
       ),
@@ -1814,6 +1815,7 @@ metminer_global_ai_module_advisor_context <- function(global_data, prj_init, adv
         sample_info_rows = nrow(sample_info),
         sample_info_columns = colnames(sample_info),
         sample_group_counts = metminer_global_ai_sample_group_counts(sample_info),
+        sample_design = metminer_global_ai_sample_design_summary(sample_info),
         lcms_conditions = prj_init$lcms_conditions %||% list(),
         lcms_conditions_text = prj_init$lcms_conditions_text %||% NA_character_
       ),
@@ -1869,6 +1871,8 @@ metminer_global_ai_module_advisor_messages <- function(user_question,
     paste0("You are ", advisor_name, ", a module-aware assistant inside MetMiner Bot."),
     paste0("Answer in ", language_label, ". Keep sample IDs, group labels, method names, thresholds, file paths, m/z and RT values unchanged."),
     "Use advisor_context as the source of truth for current project state, UI parameters, available objects, and results.",
+    "Interpret sample_info as an extensible experimental-design table. Inspect all sample_info columns and the sample_design summary; do not assume the design is limited to class, group, batch, tissue, or time.",
+    "When many biological or metadata strata are present, explicitly consider sample heterogeneity, group-specific missingness, and risks for QC-based normalization or imputation.",
     "Use retrieved_knowledge only for MetMiner behavior and parameter interpretation.",
     "Do not invent plots, uploaded files, sample metadata, database contents, or results not present in advisor_context.",
     "Give practical, conservative parameter advice and name the exact evidence that supports it.",
@@ -1915,6 +1919,7 @@ metminer_global_ai_data_import_context <- function(global_data, prj_init) {
         mass_dataset_dir = prj_init$mass_dataset_dir %||% NA_character_,
         sample_info_rows = nrow(sample_info),
         sample_info_columns = colnames(sample_info),
+        sample_design = metminer_global_ai_sample_design_summary(sample_info),
         sample_info_preview = utils::head(sample_info, 8),
         lcms_conditions = prj_init$lcms_conditions %||% list(),
         lcms_conditions_text = prj_init$lcms_conditions_text %||% NA_character_
@@ -1940,6 +1945,8 @@ metminer_global_ai_data_import_advisor_messages <- function(user_question,
     "You are Data Import Advisor, a module-aware assistant inside MetMiner Bot.",
     paste0("Answer in ", language_label, ". Keep sample IDs, file paths, parameters, m/z and RT values unchanged."),
     "Use advisor_context as the source of truth for the current project and data-import state.",
+    "Interpret sample_info as an extensible experimental-design table. Use sample_design to inspect all user-provided sample attribute columns, not only class, group, batch, tissue, or time.",
+    "If the design is highly heterogeneous, warn that later missing-value filtering, imputation, normalization, and QC interpretation should be checked within relevant sample strata.",
     "Use retrieved_knowledge for MetMiner data-import behavior and parameter meanings.",
     "Do not invent uploaded files, sample groups, object dimensions, or optimization results.",
     "For parameter advice, explain the practical effect of increasing or decreasing each parameter.",
@@ -1990,7 +1997,10 @@ metminer_global_ai_outlier_context <- function(global_data, prj_init) {
       project = list(
         job_id = prj_init$job_id %||% NA_character_,
         working_dir = prj_init$wd %||% NA_character_,
-        mass_dataset_dir = prj_init$mass_dataset_dir %||% NA_character_
+        mass_dataset_dir = prj_init$mass_dataset_dir %||% NA_character_,
+        sample_info_rows = nrow(as.data.frame(prj_init$sample_info %||% data.frame())),
+        sample_info_columns = colnames(as.data.frame(prj_init$sample_info %||% data.frame())),
+        sample_design = metminer_global_ai_sample_design_summary(prj_init$sample_info %||% data.frame())
       ),
       outlier_ui_state = state,
       input_objects = list(
@@ -2031,6 +2041,7 @@ metminer_global_ai_outlier_advisor_messages <- function(user_question,
     "Use retrieved_knowledge for general MetMiner or LC-MS QC behavior, but do not override current project evidence.",
     "Do not invent PCA plots, removed samples, or sample metadata not present in advisor_context.",
     "Give conservative sample-removal advice. Removing a sample should require convergent evidence such as high NA frequency, extreme PCA distance, abnormal total intensity, and/or consistency across POS and NEG.",
+    "Do not treat a normal opposite ion mode as proof that the sample is good. If positive and negative modes may have been acquired separately, a single-mode high-missingness or low-intensity pattern can still indicate an injection/acquisition failure such as bubbles, too little sample, evaporation, vial depletion, needle pickup failure, or source instability.",
     "Warn when PCA separation may reflect biology, treatment group, batch, or injection order rather than technical failure.",
     "Explain the current auto-removal rule: in this module, automatic removal requires a sample to satisfy ALL selected criteria.",
     "When giving advice, prefer this structure: conclusion, evidence by polarity, threshold/parameter interpretation, next action.",
@@ -2080,7 +2091,10 @@ metminer_global_ai_missing_value_context <- function(global_data, prj_init) {
       project = list(
         job_id = prj_init$job_id %||% NA_character_,
         working_dir = prj_init$wd %||% NA_character_,
-        mass_dataset_dir = prj_init$mass_dataset_dir %||% NA_character_
+        mass_dataset_dir = prj_init$mass_dataset_dir %||% NA_character_,
+        sample_info_rows = nrow(as.data.frame(prj_init$sample_info %||% data.frame())),
+        sample_info_columns = colnames(as.data.frame(prj_init$sample_info %||% data.frame())),
+        sample_design = metminer_global_ai_sample_design_summary(prj_init$sample_info %||% data.frame())
       ),
       imputation_ui_state = state,
       objects = list(
@@ -2104,6 +2118,9 @@ metminer_global_ai_missing_value_advisor_messages <- function(user_question,
     "You are Missing Value Advisor, a module-aware assistant inside MetMiner Bot.",
     paste0("Answer in ", language_label, ". Keep sample IDs, group labels, method names, thresholds, file paths, m/z and RT values unchanged."),
     "Use advisor_context as the source of truth for the current project and missing-value imputation state.",
+    "Interpret sample_info as an extensible experimental-design table. Inspect all sample_info columns and sample_design; do not limit reasoning to class, group, batch, tissue, or time.",
+    "For heterogeneous designs, distinguish global missingness from group-specific or attribute-specific absence, and avoid treating biologically sparse features as simple technical failures without evidence.",
+    "When high missingness appears in only one ion mode, keep both interpretations open: biological or ionization-specific sparsity, and single-mode injection/acquisition failure if modes were acquired separately. A normal opposite mode weakens whole-sample failure evidence but does not rule out a problem in the affected run.",
     "Use retrieved_knowledge for MetMiner imputation behavior and parameter meanings, but do not override current project evidence.",
     "Do not invent missing-value plots, sample metadata, or imputation results not present in advisor_context.",
     "Give conservative imputation advice. If missingness is very high in specific samples or variables, recommend checking noise filtering/outlier handling before imputation.",
@@ -2304,6 +2321,115 @@ metminer_global_ai_sample_group_counts <- function(sample_info) {
   sample_info <- as.data.frame(sample_info %||% data.frame(), stringsAsFactors = FALSE)
   cols <- intersect(c("class", "group", "batch"), colnames(sample_info))
   stats::setNames(lapply(cols, function(col) as.list(table(sample_info[[col]], useNA = "ifany"))), cols)
+}
+
+metminer_global_ai_sample_design_summary <- function(sample_info,
+                                                     max_columns = 40,
+                                                     max_levels = 8,
+                                                     max_combination_columns = 6) {
+  sample_info <- as.data.frame(sample_info %||% data.frame(), stringsAsFactors = FALSE)
+  if (nrow(sample_info) == 0 || ncol(sample_info) == 0) {
+    return(list(available = FALSE, rows = nrow(sample_info), columns = colnames(sample_info)))
+  }
+
+  normalize_values <- function(x) {
+    if (is.factor(x)) x <- as.character(x)
+    if (is.character(x)) {
+      x <- trimws(x)
+      x[!nzchar(x)] <- NA_character_
+    }
+    x
+  }
+
+  profile_column <- function(col) {
+    x <- normalize_values(sample_info[[col]])
+    missing <- is.na(x)
+    non_missing <- x[!missing]
+    unique_count <- length(unique(non_missing))
+    type <- paste(class(sample_info[[col]]), collapse = "/")
+    out <- list(
+      column = col,
+      type = type,
+      missing_count = sum(missing),
+      missing_fraction = signif(mean(missing), 4),
+      unique_count = unique_count
+    )
+
+    if (is.numeric(non_missing) && length(non_missing) > 0) {
+      finite_values <- non_missing[is.finite(non_missing)]
+      out$numeric_summary <- if (length(finite_values) > 0) {
+        list(
+          min = signif(min(finite_values), 5),
+          median = signif(stats::median(finite_values), 5),
+          max = signif(max(finite_values), 5)
+        )
+      } else {
+        list()
+      }
+    }
+
+    if (!is.numeric(non_missing) || unique_count <= max_levels * 3) {
+      tab <- sort(table(as.character(non_missing), useNA = "no"), decreasing = TRUE)
+      out$top_levels <- as.list(utils::head(tab, max_levels))
+    }
+    out
+  }
+
+  profiles <- lapply(utils::head(colnames(sample_info), max_columns), profile_column)
+  names(profiles) <- vapply(profiles, function(x) x$column, character(1))
+
+  excluded <- c("sample_id", "raw_file_name")
+  design_candidates <- vapply(profiles, function(p) {
+    !p$column %in% excluded &&
+      is.finite(p$missing_fraction) &&
+      p$missing_fraction < 0.8 &&
+      p$unique_count >= 2 &&
+      p$unique_count <= max(30, ceiling(nrow(sample_info) / 2))
+  }, logical(1))
+  design_columns <- names(profiles)[design_candidates]
+  design_columns <- design_columns[seq_len(min(length(design_columns), max_combination_columns))]
+
+  combination_summary <- list(available = FALSE)
+  if (length(design_columns) > 0) {
+    combo_data <- sample_info[, design_columns, drop = FALSE]
+    combo_data <- as.data.frame(lapply(combo_data, normalize_values), stringsAsFactors = FALSE)
+    combo_data[] <- lapply(combo_data, function(x) ifelse(is.na(x), "<missing>", as.character(x)))
+    combo <- do.call(paste, c(combo_data, sep = " | "))
+    combo_tab <- sort(table(combo), decreasing = TRUE)
+    combination_summary <- list(
+      available = TRUE,
+      columns_used = design_columns,
+      combination_count = length(combo_tab),
+      singleton_combinations = sum(combo_tab == 1),
+      min_replicates_per_combination = if (length(combo_tab) > 0) min(combo_tab) else NA_integer_,
+      median_replicates_per_combination = if (length(combo_tab) > 0) stats::median(as.numeric(combo_tab)) else NA_real_,
+      top_combinations = as.list(utils::head(combo_tab, max_levels))
+    )
+  }
+
+  warnings <- character()
+  if (length(design_columns) >= 3) {
+    warnings <- c(warnings, "Multiple sample-attribute columns suggest a heterogeneous or factorial design; inspect group-specific missingness before global filtering or imputation.")
+  }
+  if (isTRUE(combination_summary$available) && combination_summary$combination_count >= max(8, nrow(sample_info) / 10)) {
+    warnings <- c(warnings, "Many sample-attribute combinations were detected; global missing-rate summaries may hide biologically specific presence/absence patterns.")
+  }
+  if (isTRUE(combination_summary$available) && combination_summary$singleton_combinations > 0) {
+    warnings <- c(warnings, "Some sample-attribute combinations have only one sample; be cautious when interpreting within-stratum missingness or QC summaries.")
+  }
+
+  list(
+    available = TRUE,
+    rows = nrow(sample_info),
+    columns = colnames(sample_info),
+    profiled_columns = names(profiles),
+    core_columns_present = intersect(c("sample_id", "class", "group", "batch", "injection.order"), colnames(sample_info)),
+    user_attribute_columns = setdiff(colnames(sample_info), c("sample_id", "raw_file_name", "class", "group", "batch", "injection.order")),
+    column_profiles = profiles,
+    inferred_design_columns = design_columns,
+    combination_summary = combination_summary,
+    heterogeneity_warnings = warnings
+  )
 }
 
 metminer_global_ai_raw_ms_structure <- function(raw_dir) {

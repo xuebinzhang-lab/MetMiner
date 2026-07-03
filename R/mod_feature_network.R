@@ -60,11 +60,14 @@ mod_feature_network_ui <- function(id) {
               checkboxInput(ns("use_ms2"), "Use audited MS2 evidence for ISF", value = TRUE),
               conditionalPanel(
                 condition = sprintf("input['%s'] == true", ns("use_ms2")),
-                fileInput(ns("ms2_zip"), "MS2 Spectra ZIP (.mgf)", accept = ".zip", placeholder = "No file selected"),
+                uiOutput(ns("ms2_existing_status")),
+                fileInput(ns("ms2_zip"), "Optional MS2 Spectra ZIP (.mgf)", accept = ".zip", placeholder = "No file selected"),
                 selectInput(ns("ms2_column"), "LC Column", choices = c("RP" = "rp", "HILIC" = "hilic"), selected = "rp"),
                 numericInput(ns("ms2_match_mz_tol"), "MS1-MS2 Match m/z (ppm)", value = 15, min = 0.1, step = 0.5),
                 numericInput(ns("ms2_match_rt_tol"), "MS1-MS2 Match RT (sec)", value = 30, min = 0.1, step = 1),
                 actionButton(ns("attach_ms2_zip"), "Attach MS2 to Normalized Data", icon = icon("link"), class = "btn-outline-primary w-100 mb-2"),
+                tags$small(class = "text-muted d-block mb-2",
+                           "Skip ZIP upload when the normalized mass_dataset already contains MS2 assignments."),
                 tags$hr(),
                 numericInput(ns("ms2_mz_tol_ppm"), "Strict MS2 Audit m/z (ppm)", value = 5, min = 0.1, step = 0.5),
                 numericInput(ns("ms2_rt_tol"), "Strict MS2 Audit RT (sec)", value = 10, min = 0.1, step = 1),
@@ -76,7 +79,7 @@ mod_feature_network_ui <- function(id) {
               title = "Build",
               icon = bsicons::bs_icon("play-circle"),
               tags$small(class = "text-muted d-block mb-2",
-                         "Build runs on normalized data. If MS2 ZIP is provided and MS2 evidence is enabled, spectra are attached before network detection."),
+                         "Build runs on normalized data. Existing MS2 assignments are used directly; an uploaded MS2 ZIP is attached only when provided."),
               actionButton(ns("run_network"), "Build Feature Network", icon = icon("project-diagram"), class = "btn-teal w-100 fw-bold shadow-sm")
             )
           )
@@ -190,7 +193,7 @@ mod_feature_network_ui <- function(id) {
                 ),
                 div(
                   bslib::card(
-                    height = "300px",
+                    height = "360px",
                     full_screen = TRUE,
                     bslib::card_header(
                       div(
@@ -228,8 +231,9 @@ mod_feature_network_ui <- function(id) {
                       ),
                       class = "bg-light"
                     ),
+                    uiOutput(ns("eic_file_selector")),
                     tags$div(class = "px-2 pb-2 text-muted small", textOutput(ns("selected_eic_text"))),
-                    plotly::plotlyOutput(ns("feature_eic_plot"), height = "235px")
+                    plotly::plotlyOutput(ns("feature_eic_plot"), height = "245px")
                   )
                 )
               )
@@ -422,6 +426,44 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
       ms2_root <- process_ms2_zip()
       attach_ms2_to_normalized_objects(ms2_root)
     }
+
+    count_ms2_assignments <- function(object) {
+      if (is.null(object)) {
+        return(0L)
+      }
+      ms2_sets <- tryCatch(massdataset::extract_ms2_data(object), error = function(e) list())
+      if (length(ms2_sets) == 0) {
+        return(0L)
+      }
+      sum(vapply(ms2_sets, function(ms2_obj) {
+        length(tryCatch(methods::slot(ms2_obj, "variable_id"), error = function(e) character()))
+      }, integer(1)), na.rm = TRUE)
+    }
+
+    existing_ms2_summary <- reactive({
+      c(
+        positive = count_ms2_assignments(global_data$object_pos_norm),
+        negative = count_ms2_assignments(global_data$object_neg_norm)
+      )
+    })
+
+    output$ms2_existing_status <- renderUI({
+      counts <- existing_ms2_summary()
+      total <- sum(counts, na.rm = TRUE)
+      if (total > 0) {
+        return(tags$div(
+          class = "alert alert-success py-2 px-3 mb-2 small",
+          tags$strong("Existing MS2 detected: "),
+          sprintf("POS %d, NEG %d assignments. ZIP upload can be skipped.",
+                  counts[["positive"]], counts[["negative"]])
+        ))
+      }
+      tags$div(
+        class = "alert alert-secondary py-2 px-3 mb-2 small",
+        "No MS2 assignments detected in normalized objects. Upload a ZIP only if you want MS2-audited ISF evidence."
+      )
+    })
+    outputOptions(output, "ms2_existing_status", suspendWhenHidden = FALSE)
 
     build_merged_network <- function() {
       if (!is.null(global_data$object_pos_network) && !is.null(global_data$object_neg_network)) {
@@ -643,6 +685,17 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
           update_progress_modal(15, paste("MS2 attached:", paste(attached, collapse = ", ")))
           pos_in <- global_data$object_pos_norm
           neg_in <- global_data$object_neg_norm
+        } else if (isTRUE(input$use_ms2)) {
+          ms2_counts <- existing_ms2_summary()
+          if (sum(ms2_counts, na.rm = TRUE) > 0) {
+            update_progress_modal(
+              12,
+              sprintf("Using existing MS2 assignments: POS %d, NEG %d.",
+                      ms2_counts[["positive"]], ms2_counts[["negative"]])
+            )
+          } else {
+            update_progress_modal(12, "MS2 evidence enabled, but no uploaded ZIP or existing MS2 assignments were found.")
+          }
         }
 
         polarities <- list(
@@ -986,7 +1039,10 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
     }, ignoreInit = TRUE)
 
     ms1_plot_click <- reactive({
-      plotly::event_data("plotly_click", source = "subnetwork_ms1", priority = "event")
+      req(!is.null(selected_node_id()))
+      suppressWarnings(
+        plotly::event_data("plotly_click", source = "subnetwork_ms1", priority = "event")
+      )
     })
 
     observeEvent(ms1_plot_click(), {
@@ -1173,13 +1229,15 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
     feature_eic_data <- reactive({
       feature_id <- selected_ms1_peak_id()
       req(feature_id)
+      selected_raw_files <- input$eic_raw_files %||% character()
 
       if (identical(input$network_scope, "merged")) {
         return(make_feature_eic_data(
           wd = prj_init$wd,
           positive_object = global_data$object_pos_network,
           negative_object = global_data$object_neg_network,
-          feature_id = feature_id
+          feature_id = feature_id,
+          selected_raw_files = selected_raw_files
         ))
       }
 
@@ -1189,7 +1247,52 @@ mod_feature_network_server <- function(id, global_data, prj_init) {
         wd = prj_init$wd,
         object = obj,
         feature_id = feature_id,
-        mode = input$view_mode
+        mode = input$view_mode,
+        selected_raw_files = selected_raw_files
+      )
+    })
+
+    selected_eic_mode <- reactive({
+      feature_id <- selected_ms1_peak_id()
+      if (is.null(feature_id)) {
+        return(if (identical(input$view_mode, "negative")) "negative" else "positive")
+      }
+      if (grepl("^neg::", feature_id)) return("negative")
+      if (grepl("^pos::", feature_id)) return("positive")
+      if (identical(input$network_scope, "merged")) return(NULL)
+      if (identical(input$view_mode, "negative")) "negative" else "positive"
+    })
+
+    output$eic_file_selector <- renderUI({
+      mode <- selected_eic_mode()
+      if (is.null(mode)) {
+        return(tags$div(class = "px-2 pt-2 text-muted small", "Select a POS or NEG feature to choose chromatogram files."))
+      }
+      files <- find_local_ms1_raw_files(prj_init$wd, mode)
+      if (length(files) == 0) {
+        return(tags$div(
+          class = "px-2 pt-2 text-muted small",
+          "No local mzXML/mzML files detected for this ion mode. The app will try the paths stored in xdata."
+        ))
+      }
+      labels <- make_raw_file_choice_labels(files)
+      choices <- stats::setNames(files, labels)
+      previous <- input$eic_raw_files %||% character()
+      selected <- intersect(previous, files)
+      if (length(selected) == 0) {
+        selected <- files[1]
+      }
+      div(
+        class = "px-2 pt-2",
+        selectizeInput(
+          session$ns("eic_raw_files"),
+          "Chromatogram files",
+          choices = choices,
+          selected = selected,
+          multiple = TRUE,
+          width = "100%",
+          options = list(plugins = list("remove_button"), maxItems = min(length(files), 40))
+        )
       )
     })
 
@@ -2236,7 +2339,8 @@ make_feature_eic_data <- function(wd,
                                   mode = NULL,
                                   expand_rt = 15,
                                   expand_mz = 0.01,
-                                  max_traces = 8) {
+                                  max_traces = 8,
+                                  selected_raw_files = character()) {
   if (!is.null(object)) {
     return(extract_feature_eic_data(
       wd = wd,
@@ -2246,7 +2350,8 @@ make_feature_eic_data <- function(wd,
       mode = mode,
       expand_rt = expand_rt,
       expand_mz = expand_mz,
-      max_traces = max_traces
+      max_traces = max_traces,
+      selected_raw_files = selected_raw_files
     ))
   }
 
@@ -2259,7 +2364,8 @@ make_feature_eic_data <- function(wd,
       mode = "positive",
       expand_rt = expand_rt,
       expand_mz = expand_mz,
-      max_traces = max_traces
+      max_traces = max_traces,
+      selected_raw_files = selected_raw_files
     ))
   }
 
@@ -2272,7 +2378,8 @@ make_feature_eic_data <- function(wd,
       mode = "negative",
       expand_rt = expand_rt,
       expand_mz = expand_mz,
-      max_traces = max_traces
+      max_traces = max_traces,
+      selected_raw_files = selected_raw_files
     ))
   }
 
@@ -2286,7 +2393,8 @@ extract_feature_eic_data <- function(wd,
                                      mode,
                                      expand_rt,
                                      expand_mz,
-                                     max_traces) {
+                                     max_traces,
+                                     selected_raw_files = character()) {
   if (is.null(wd) || !dir.exists(wd)) {
     return(empty_eic_plot_data(display_id, "Project MS1 directory is not available."))
   }
@@ -2312,7 +2420,11 @@ extract_feature_eic_data <- function(wd,
   if (is.na(xdata_name)) {
     return(empty_eic_plot_data(display_id, "Detected xdata file does not contain an XCMS object."))
   }
-  xdata <- env[[xdata_name]]
+  xdata <- repair_xcms_xdata_for_current_bioc(env[[xdata_name]])
+  xdata <- restrict_xcms_xdata_to_raw_files(xdata, selected_raw_files)
+  if (inherits(xdata, "error")) {
+    return(empty_eic_plot_data(display_id, paste("Could not prepare selected chromatogram files:", xdata$message)))
+  }
 
   mz <- as.numeric(selected$mz[1])
   rt <- as.numeric(selected$rt[1])
@@ -2332,10 +2444,12 @@ extract_feature_eic_data <- function(wd,
     error = function(e) e
   )
   if (inherits(chrom, "error")) {
-    return(empty_eic_plot_data(display_id, paste("Could not extract chromatogram:", chrom$message)))
+    return(empty_eic_plot_data(display_id, paste("Could not extract chromatogram:", format_eic_error_message(chrom$message))))
   }
 
-  eic_data <- xchromatograms_to_plot_data(chrom, max_traces = max_traces)
+  selected_trace_count <- length(unique(basename(as.character(selected_raw_files %||% character()))))
+  plot_max_traces <- if (selected_trace_count > 0) max(max_traces, selected_trace_count) else max_traces
+  eic_data <- xchromatograms_to_plot_data(chrom, max_traces = plot_max_traces)
   if (nrow(eic_data) == 0) {
     return(empty_eic_plot_data(display_id, "No chromatographic signal was extracted for this feature."))
   }
@@ -2349,6 +2463,180 @@ extract_feature_eic_data <- function(wd,
     data = eic_data,
     message = "OK"
   )
+}
+
+repair_xcms_xdata_for_current_bioc <- function(xdata) {
+  xdata <- repair_annotated_data_frame_slot(xdata, "phenoData")
+  xdata <- repair_annotated_data_frame_slot(xdata, "featureData")
+  xdata <- repair_annotated_data_frame_slot(xdata, "protocolData")
+  xdata
+}
+
+restrict_xcms_xdata_to_raw_files <- function(xdata, selected_raw_files = character()) {
+  selected_raw_files <- unique(as.character(selected_raw_files %||% character()))
+  selected_raw_files <- selected_raw_files[nzchar(selected_raw_files) & file.exists(selected_raw_files)]
+  if (length(selected_raw_files) == 0) {
+    return(xdata)
+  }
+
+  old_files <- tryCatch(MSnbase::fileNames(xdata), error = function(e) character())
+  if (length(old_files) == 0) {
+    return(simpleError("The loaded xdata object does not expose raw file names."))
+  }
+
+  selected_by_base <- selected_raw_files
+  names(selected_by_base) <- basename(selected_raw_files)
+  selected_bases <- names(selected_by_base)
+  matched_idx <- which(basename(old_files) %in% selected_bases)
+  if (length(matched_idx) == 0) {
+    return(simpleError(
+      paste(
+        "None of the selected local raw files match the file names stored in xdata.",
+        "Selected examples:", paste(utils::head(selected_bases, 5), collapse = ", ")
+      )
+    ))
+  }
+
+  xdata <- relink_xcms_processing_files(xdata, matched_idx, selected_by_base)
+  tryCatch(
+    MSnbase::filterFile(xdata, file = matched_idx),
+    error = function(e) e
+  )
+}
+
+relink_xcms_processing_files <- function(xdata, matched_idx, selected_by_base) {
+  if (!"processingData" %in% slotNames(xdata)) {
+    return(xdata)
+  }
+  processing_data <- tryCatch(slot(xdata, "processingData"), error = function(e) NULL)
+  if (is.null(processing_data) || !"files" %in% slotNames(processing_data)) {
+    return(xdata)
+  }
+  files <- tryCatch(slot(processing_data, "files"), error = function(e) character())
+  if (length(files) == 0) {
+    return(xdata)
+  }
+
+  matched_bases <- basename(files[matched_idx])
+  replacement <- unname(selected_by_base[matched_bases])
+  keep <- !is.na(replacement) & file.exists(replacement)
+  if (!any(keep)) {
+    return(xdata)
+  }
+  files[matched_idx[keep]] <- replacement[keep]
+  tryCatch({
+    slot(processing_data, "files") <- files
+    slot(xdata, "processingData") <- processing_data
+    xdata
+  }, error = function(e) xdata)
+}
+
+repair_annotated_data_frame_slot <- function(object, slot_name) {
+  if (is.null(object) || !slot_name %in% slotNames(object)) {
+    return(object)
+  }
+  value <- tryCatch(slot(object, slot_name), error = function(e) NULL)
+  if (is.null(value) || is(value, "AnnotatedDataFrame")) {
+    return(object)
+  }
+
+  data <- attr(value, "data", exact = TRUE)
+  if (is.null(data)) {
+    data <- attr(value, "pData", exact = TRUE)
+  }
+  if (is.null(data) || !is.data.frame(data)) {
+    return(object)
+  }
+
+  var_metadata <- attr(value, "varMetadata", exact = TRUE)
+  if (is.null(var_metadata) || !is.data.frame(var_metadata)) {
+    var_metadata <- data.frame(
+      labelDescription = rep(NA_character_, ncol(data)),
+      row.names = colnames(data),
+      stringsAsFactors = FALSE
+    )
+  }
+  if (!identical(rownames(var_metadata), colnames(data))) {
+    var_metadata <- var_metadata[match(colnames(data), rownames(var_metadata)), , drop = FALSE]
+    rownames(var_metadata) <- colnames(data)
+  }
+
+  repaired <- tryCatch(
+    Biobase::AnnotatedDataFrame(data = data, varMetadata = var_metadata),
+    error = function(e) Biobase::AnnotatedDataFrame(data = data)
+  )
+  tryCatch({
+    slot(object, slot_name) <- repaired
+    object
+  }, error = function(e) object)
+}
+
+find_local_ms1_raw_files <- function(wd, mode) {
+  if (is.null(wd) || !dir.exists(wd)) {
+    return(character())
+  }
+  mode_dir <- if (identical(mode, "negative")) "NEG" else "POS"
+  search_roots <- unique(c(
+    file.path(wd, "MS1", mode_dir),
+    file.path(wd, mode_dir),
+    file.path(wd, "MS1"),
+    wd
+  ))
+  search_roots <- search_roots[dir.exists(search_roots)]
+  if (length(search_roots) == 0) {
+    return(character())
+  }
+  files <- unlist(lapply(search_roots, function(root) {
+    list.files(
+      root,
+      pattern = "\\.(mzXML|mzML|mzData)$",
+      recursive = TRUE,
+      full.names = TRUE,
+      ignore.case = TRUE,
+      no.. = TRUE
+    )
+  }), use.names = FALSE)
+  files <- unique(normalizePath(files, winslash = "/", mustWork = TRUE))
+  files <- files[grepl(paste0("/", mode_dir, "(/|$)"), files)]
+  sort(files)
+}
+
+make_raw_file_choice_labels <- function(files) {
+  labels <- basename(files)
+  duplicated_labels <- labels %in% labels[duplicated(labels)]
+  if (any(duplicated_labels)) {
+    parent <- basename(dirname(files[duplicated_labels]))
+    labels[duplicated_labels] <- paste0(parent, "/", labels[duplicated_labels])
+  }
+  labels
+}
+
+format_eic_error_message <- function(message) {
+  message <- as.character(message %||% "")
+  if (grepl("NAnnotatedDataFrame|phenoData|AnnotatedDataFrame", message, perl = TRUE)) {
+    return(paste(
+      message,
+      "This looks like an xcms/MSnbase compatibility issue from an older tidymass result object; MetMiner attempted to repair the loaded xdata in memory."
+    ))
+  }
+  if (grepl("Required data file .* not found|No such file|cannot find|does not exist", message, ignore.case = TRUE, perl = TRUE)) {
+    missing_count <- length(gregexpr("Required data file", message, fixed = TRUE)[[1]])
+    if (missing_count < 1 || gregexpr("Required data file", message, fixed = TRUE)[[1]][1] < 0) {
+      missing_count <- NA_integer_
+    }
+    first_match <- regexec("Required data file '([^']+)'", message, perl = TRUE)
+    first_match <- regmatches(message, first_match)[[1]]
+    first_file <- if (length(first_match) >= 2) first_match[2] else "unknown"
+    return(paste(
+      sprintf(
+        "Required raw data files are not accessible%s%s.",
+        if (is.finite(missing_count)) paste0(" (", missing_count, " missing paths detected)") else "",
+        if (nzchar(first_file)) paste0("; first missing file: ", first_file) else ""
+      ),
+      "The copied xdata is an on-disk object and still needs access to the original mzXML/mzML files. Copy the raw POS/NEG files or recreate xdata on this computer so the stored file paths are valid."
+    ))
+  }
+  message
 }
 
 find_xcms_xdata_path <- function(wd, mode) {

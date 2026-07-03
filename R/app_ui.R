@@ -31,8 +31,8 @@ app_ui <- function(request) {
         bootswatch = "zephyr",
         primary = "#008080",
         "navbar-bg" = "#ffffff",
-        base_font = font_google("Inter"),
-        heading_font = font_google("Plus Jakarta Sans"),
+        base_font = font_collection("Inter", "Segoe UI", "Arial", "sans-serif"),
+        heading_font = font_collection("Plus Jakarta Sans", "Segoe UI", "Arial", "sans-serif"),
         # Give navbar content a little more breathing room.
         "navbar-padding-y" = "0.8rem"
       ),

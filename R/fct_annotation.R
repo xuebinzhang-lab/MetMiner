@@ -222,20 +222,199 @@ metminer_collect_annotation_databases <- function(builtin_ids = character(),
                                                   custom_dir = NULL,
                                                   local_dir = NULL) {
   builtin_ids <- metminer_expand_builtin_annotation_ids(builtin_ids)
-  dbs <- c(
-    lapply(builtin_ids, metminer_load_builtin_database),
-    metminer_load_local_databases(kegg_dir),
-    metminer_load_local_databases(custom_dir),
-    metminer_load_local_databases(local_dir)
-  )
+  dbs <- list()
+
+  for (database_id in builtin_ids) {
+    db <- tryCatch(
+      metminer_load_builtin_database(database_id),
+      error = function(e) {
+        warning("Skipped annotation database '", database_id, "': ", e$message, call. = FALSE)
+        NULL
+      }
+    )
+    if (!is.null(db)) {
+      dbs[[length(dbs) + 1L]] <- db
+    }
+  }
+
+  for (directory in list(kegg_dir, custom_dir, local_dir)) {
+    loaded <- tryCatch(
+      metminer_load_local_databases(directory),
+      error = function(e) {
+        warning("Skipped local annotation database folder: ", e$message, call. = FALSE)
+        list()
+      }
+    )
+    dbs <- c(dbs, loaded)
+  }
 
   if (length(dbs) == 0) {
     stop("No annotation database selected or loaded.", call. = FALSE)
   }
-  dbs
+  unname(dbs)
 }
 
 # ---- Annotation execution ----
+
+metminer_annotation_database_type <- function(database = NULL, database_id = NA_character_, label = NA_character_) {
+  text <- paste(
+    as.character(database_id %||% NA_character_),
+    as.character(label %||% NA_character_),
+    tryCatch(as.character(database@database.info$Source %||% NA_character_), error = function(e) NA_character_),
+    tryCatch(as.character(database@database.info$Version %||% NA_character_), error = function(e) NA_character_),
+    collapse = " "
+  )
+  text <- tolower(text)
+  dplyr::case_when(
+    grepl("plantcyc|pmn|biocyc|pgdb|_cyc", text, perl = TRUE) ~ "plantcyc",
+    grepl("kegg", text, perl = TRUE) ~ "kegg",
+    grepl("hmdb|massbank|mona|gnps|respect|rist|nist|mzcloud|massive", text, perl = TRUE) ~ "public_ms2",
+    TRUE ~ "custom"
+  )
+}
+
+metminer_empty_annotation_table <- function() {
+  cols <- c(
+    "variable_id", "ms2_spectrum_id", "Compound.name", "CAS.ID", "HMDB.ID",
+    "KEGG.ID", "PlantCyc.ID", "BIOCYC.ID", "Lab.ID", "Adduct",
+    "mz.error", "mz.match.score", "RT.error", "RT.match.score", "CE", "SS",
+    "Total.score", "Database", "Database.ID", "Database.Label", "Database.Source.Type",
+    "Level", "Annotation.Layer", "Annotation.Layer.detail", "annotation_layer",
+    "evidence_scope", "core_adduct_match", "strict_genome_adduct_pass",
+    "metminer_confidence_level", "database_rank", "annotation_rank"
+  )
+  char_cols <- c(
+    "variable_id", "ms2_spectrum_id", "Compound.name", "CAS.ID", "HMDB.ID",
+    "KEGG.ID", "PlantCyc.ID", "BIOCYC.ID", "Lab.ID", "Adduct",
+    "CE", "Database", "Database.ID", "Database.Label", "Database.Source.Type",
+    "Annotation.Layer", "Annotation.Layer.detail", "annotation_layer",
+    "evidence_scope", "core_adduct_match", "strict_genome_adduct_pass",
+    "metminer_confidence_level"
+  )
+  numeric_cols <- c("mz.error", "mz.match.score", "RT.error", "RT.match.score", "SS", "Total.score")
+  integer_cols <- c("Level", "database_rank", "annotation_rank")
+  out <- c(
+    stats::setNames(rep(list(character()), length(char_cols)), char_cols),
+    stats::setNames(rep(list(numeric()), length(numeric_cols)), numeric_cols),
+    stats::setNames(rep(list(integer()), length(integer_cols)), integer_cols)
+  )
+  out <- as.data.frame(out, stringsAsFactors = FALSE)
+  out[, cols, drop = FALSE]
+}
+
+metminer_coerce_annotation_table_types <- function(tab) {
+  if (is.null(tab) || nrow(tab) == 0) {
+    return(metminer_empty_annotation_table())
+  }
+  tab <- as.data.frame(tab, stringsAsFactors = FALSE)
+  char_cols <- c(
+    "variable_id", "ms2_spectrum_id", "Compound.name", "CAS.ID", "HMDB.ID",
+    "KEGG.ID", "PlantCyc.ID", "BIOCYC.ID", "Lab.ID", "Adduct", "CE",
+    "Database", "Database.ID", "Database.Label", "Database.Source.Type",
+    "Annotation.Layer", "Annotation.Layer.detail", "annotation_layer",
+    "evidence_scope", "core_adduct_match", "strict_genome_adduct_pass",
+    "metminer_confidence_level"
+  )
+  numeric_cols <- c("mz.error", "mz.match.score", "RT.error", "RT.match.score", "SS", "Total.score")
+  integer_cols <- c("Level", "database_rank", "annotation_rank")
+  for (col in intersect(char_cols, colnames(tab))) {
+    tab[[col]] <- as.character(tab[[col]])
+  }
+  for (col in intersect(numeric_cols, colnames(tab))) {
+    tab[[col]] <- suppressWarnings(as.numeric(tab[[col]]))
+  }
+  for (col in intersect(integer_cols, colnames(tab))) {
+    tab[[col]] <- suppressWarnings(as.integer(tab[[col]]))
+  }
+  tab
+}
+
+metminer_order_annotation_table <- function(tab) {
+  if (is.null(tab) || nrow(tab) == 0) {
+    return(metminer_empty_annotation_table())
+  }
+  tab <- as.data.frame(tab, stringsAsFactors = FALSE)
+  if (!"variable_id" %in% colnames(tab)) {
+    return(metminer_empty_annotation_table())
+  }
+  tab$Level <- suppressWarnings(as.integer(tab$Level))
+  tab$Total.score <- suppressWarnings(as.numeric(tab$Total.score))
+  if (!"annotation_layer" %in% colnames(tab)) tab$annotation_layer <- NA_character_
+  if (!"database_rank" %in% colnames(tab)) tab$database_rank <- NA_integer_
+  if (!"annotation_rank" %in% colnames(tab)) tab$annotation_rank <- NA_integer_
+  tab <- tab[order(
+    tab$variable_id,
+    metminer_annotation_layer_priority(tab$annotation_layer),
+    tab$Level,
+    -tab$Total.score,
+    tab$database_rank,
+    tab$annotation_rank,
+    na.last = TRUE
+  ), , drop = FALSE]
+  rownames(tab) <- NULL
+  tab
+}
+
+metminer_finalize_annotation_table <- function(tab) {
+  if (is.null(tab) || nrow(tab) == 0) {
+    return(metminer_empty_annotation_table())
+  }
+  tab <- metminer_order_annotation_table(tab)
+  tab <- dplyr::distinct(tab, .keep_all = TRUE)
+  required <- colnames(metminer_empty_annotation_table())
+  tab <- metminer_ensure_columns(tab, required)
+  tab <- metminer_coerce_annotation_table_types(tab)
+  extra <- setdiff(colnames(tab), c(required, "ms2_files_id"))
+  tab <- tab[, c(required, extra), drop = FALSE]
+  rownames(tab) <- NULL
+  tab
+}
+
+metminer_normalize_annotation_result <- function(tab, db, database_rank = NA_integer_,
+                                                 polarity = c("positive", "negative")) {
+  polarity <- match.arg(polarity)
+  if (is.null(tab) || nrow(tab) == 0) {
+    return(metminer_empty_annotation_table())
+  }
+
+  tab <- as.data.frame(tab, stringsAsFactors = FALSE)
+  tab$ms2_files_id <- NULL
+  tab <- metminer_standardize_review_annotation_cols(tab)
+
+  database_id <- db$id %||% NA_character_
+  database_label <- db$label %||% metminer_database_label(db$database, database_id)
+  database_type <- metminer_annotation_database_type(db$database, database_id, database_label)
+
+  tab$Database.ID <- as.character(database_id)
+  tab$Database.Label <- as.character(database_label)
+  tab$Database.Source.Type <- database_type
+  if (!"Database" %in% colnames(tab) || all(!has_text(tab$Database))) {
+    tab$Database <- database_label
+  }
+  tab <- metminer_add_annotation_layer_columns(tab, polarity)
+  tab <- metminer_fill_same_compound_annotation_ids(tab)
+  tab <- metminer_add_annotation_layer_columns(tab, polarity)
+  tab$Annotation.Layer <- metminer_annotation_layer_short_label(tab$annotation_layer)
+  tab$Annotation.Layer.detail <- tab$evidence_scope
+  tab$database_rank <- suppressWarnings(as.integer(database_rank))
+
+  tab <- metminer_order_annotation_table(tab)
+  tab$annotation_rank <- ave(seq_len(nrow(tab)), tab$variable_id, FUN = seq_along)
+  metminer_finalize_annotation_table(tab)
+}
+
+#' Normalize metID annotation process records to a list
+#'
+#' @noRd
+metminer_annotation_process_list <- function(x) {
+  if (is.null(x)) {
+    return(list())
+  }
+  if (is.list(x)) {
+    return(x)
+  }
+  list(x)
+}
 
 #' Annotate one mass_dataset with multiple metid databases
 #'
@@ -259,19 +438,69 @@ metminer_annotate_mass_dataset <- function(object, databases, polarity,
 
   column <- match.arg(column)
   out <- object
+  base_object <- object
+  base_object@annotation_table <- base_object@annotation_table[0, , drop = FALSE]
+  original_process_info <- object@process_info
+  original_annotation_process <- metminer_annotation_process_list(
+    original_process_info$annotate_metabolites_mass_dataset
+  )
 
-  for (db in databases) {
-    out <- metid::annotate_metabolites_mass_dataset(
-      object = out,
-      ms1.match.ppm = ms1.match.ppm,
-      ms2.match.ppm = ms2.match.ppm,
-      rt.match.tol = rt.match.tol,
-      polarity = polarity,
-      column = column,
-      candidate.num = candidate.num,
-      database = db$database,
-      threads = threads
+  annotation_tables <- list()
+  annotation_process <- list()
+  for (db_i in seq_along(databases)) {
+    db <- databases[[db_i]]
+    db_label <- db$label %||% db$id %||% paste0("database_", db_i)
+    annotated <- tryCatch(
+      metid::annotate_metabolites_mass_dataset(
+        object = base_object,
+        ms1.match.ppm = ms1.match.ppm,
+        ms2.match.ppm = ms2.match.ppm,
+        rt.match.tol = rt.match.tol,
+        polarity = polarity,
+        column = column,
+        candidate.num = candidate.num,
+        database = db$database,
+        threads = threads
+      ),
+      error = function(e) {
+        stop("Annotation failed while matching database '", db_label, "': ", conditionMessage(e), call. = FALSE)
+      }
     )
+    tab <- metminer_safe_extract_annotation_table(annotated)
+    if (nrow(tab) > 0) {
+      tab <- metminer_normalize_annotation_result(
+        tab = tab,
+        db = db,
+        database_rank = db_i,
+        polarity = polarity
+      )
+      annotation_tables[[length(annotation_tables) + 1L]] <- tab
+    }
+
+    db_process <- metminer_annotation_process_list(
+      annotated@process_info$annotate_metabolites_mass_dataset
+    )
+    if (length(db_process) > length(original_annotation_process)) {
+      annotation_process <- c(annotation_process, db_process[(length(original_annotation_process) + 1L):length(db_process)])
+    }
+  }
+
+  if (length(annotation_tables) > 0) {
+    combined <- dplyr::bind_rows(annotation_tables)
+    combined <- metminer_finalize_annotation_table(combined)
+    out@annotation_table <- combined
+  } else {
+    out@annotation_table <- metminer_empty_annotation_table()
+  }
+
+  if (length(annotation_process) > 0) {
+    process_info <- original_process_info
+    if (length(original_annotation_process) == 0) {
+      process_info$annotate_metabolites_mass_dataset <- annotation_process
+    } else {
+      process_info$annotate_metabolites_mass_dataset <- c(original_annotation_process, annotation_process)
+    }
+    out@process_info <- process_info
   }
 
   out
@@ -287,6 +516,48 @@ metminer_safe_extract_annotation_table <- function(object) {
     massdataset::extract_annotation_table(object),
     error = function(e) data.frame()
   )
+}
+
+metminer_annotation_layer_short_label <- function(layer) {
+  layer <- as.character(layer %||% NA_character_)
+  dplyr::case_when(
+    layer == "genome_reaction" ~ "Layer1",
+    layer %in% c("public_ms2", "local_spectral_optional", "other_spectral") ~ "Layer2",
+    TRUE ~ NA_character_
+  )
+}
+
+metminer_format_annotation_table_for_display <- function(object, mode = c("positive", "negative")) {
+  mode <- match.arg(mode)
+  tab <- metminer_safe_extract_annotation_table(object)
+  tab <- as.data.frame(tab %||% data.frame(), stringsAsFactors = FALSE)
+  if (nrow(tab) == 0) return(tab)
+
+  tab <- metminer_add_annotation_layer_columns(tab, mode = mode)
+  tab$Annotation.Layer <- metminer_annotation_layer_short_label(tab$annotation_layer)
+  tab$Annotation.Layer.detail <- tab$evidence_scope
+
+  remove_keys <- tolower(gsub("[^a-z0-9]+", "_", colnames(tab)))
+  internal_keys <- c(
+    "ms2_files_id",
+    "annotation_layer",
+    "evidence_scope",
+    "core_adduct_match",
+    "strict_genome_adduct_pass",
+    "metminer_confidence_level"
+  )
+  tab <- tab[, !remove_keys %in% internal_keys, drop = FALSE]
+
+  layer_cols <- c("Annotation.Layer", "Annotation.Layer.detail")
+  base_cols <- setdiff(colnames(tab), layer_cols)
+  insert_after <- match("Level", base_cols)
+  if (is.na(insert_after)) insert_after <- match("Database", base_cols)
+  if (is.na(insert_after)) {
+    tab <- tab[, c(layer_cols, base_cols), drop = FALSE]
+  } else {
+    tab <- tab[, c(base_cols[seq_len(insert_after)], layer_cols, base_cols[-seq_len(insert_after)]), drop = FALSE]
+  }
+  tab
 }
 
 #' Safely extract variable info from a mass_dataset object
@@ -1036,6 +1307,7 @@ metminer_prepare_annotation_candidates <- function(annotation_table) {
   if (!"evidence_scope" %in% colnames(candidates) || all(!has_text(candidates$evidence_scope))) {
     candidates$evidence_scope <- metminer_annotation_evidence_scope(candidates$annotation_layer)
   }
+  candidates <- metminer_fill_same_compound_annotation_ids(candidates)
 
   candidates$variable_id <- as.character(candidates$variable_id)
   candidates$Level <- suppressWarnings(as.integer(candidates$Level))
@@ -1795,13 +2067,83 @@ metminer_standardize_review_annotation_cols <- function(x) {
   needed <- c(
     "variable_id", "Compound.name", "KEGG.ID", "PlantCyc.ID", "BIOCYC.ID", "Lab.ID", "Adduct",
     "mz.error", "mz.match.score", "Total.score", "Database", "Level",
-    "ms2_spectrum_id"
+    "CAS.ID", "HMDB.ID", "RT.error", "RT.match.score", "CE", "SS", "ms2_spectrum_id"
   )
   for (col in needed) {
     if (!col %in% colnames(x)) {
       x[[col]] <- NA
     }
   }
+  lab <- trimws(as.character(x$Lab.ID %||% NA_character_))
+  database <- tolower(trimws(as.character(x$Database %||% NA_character_)))
+  plant <- trimws(as.character(x$PlantCyc.ID %||% NA_character_))
+  biocyc <- trimws(as.character(x$BIOCYC.ID %||% NA_character_))
+  kegg <- trimws(as.character(x$KEGG.ID %||% NA_character_))
+
+  is_plantcyc <- grepl("plantcyc|pmn|biocyc|pgdb", database, perl = TRUE)
+  fill_plant_from_biocyc <- !has_text(plant) & has_text(biocyc)
+  plant[fill_plant_from_biocyc] <- biocyc[fill_plant_from_biocyc]
+  fill_plant_from_lab <- !has_text(plant) & is_plantcyc & has_text(lab) & !grepl("^C[0-9]{5}$", lab, perl = TRUE)
+  plant[fill_plant_from_lab] <- lab[fill_plant_from_lab]
+  biocyc[!has_text(biocyc) & has_text(plant)] <- plant[!has_text(biocyc) & has_text(plant)]
+  fill_kegg_from_lab <- !has_text(kegg) & has_text(lab) & grepl("^C[0-9]{5}$", lab, perl = TRUE)
+  kegg[fill_kegg_from_lab] <- lab[fill_kegg_from_lab]
+
+  x$PlantCyc.ID <- plant
+  x$BIOCYC.ID <- biocyc
+  x$KEGG.ID <- kegg
+  x
+}
+
+metminer_annotation_compound_name_key <- function(x) {
+  x <- tolower(trimws(as.character(x %||% NA_character_)))
+  x <- gsub("\\s+", " ", x, perl = TRUE)
+  x <- gsub("[^[:alnum:]]+", "", x, perl = TRUE)
+  x[!has_text(x)] <- NA_character_
+  x
+}
+
+metminer_collapse_annotation_ids <- function(x) {
+  x <- trimws(as.character(x %||% NA_character_))
+  x <- unique(x[has_text(x)])
+  if (length(x) == 0) {
+    return(NA_character_)
+  }
+  paste(x, collapse = ";")
+}
+
+metminer_fill_same_compound_annotation_ids <- function(x) {
+  if (is.null(x) || nrow(x) == 0) {
+    return(x)
+  }
+  x <- metminer_standardize_review_annotation_cols(as.data.frame(x, stringsAsFactors = FALSE))
+  if (!all(c("variable_id", "Compound.name") %in% colnames(x))) {
+    return(x)
+  }
+
+  name_key <- metminer_annotation_compound_name_key(x$Compound.name)
+  group_key <- paste(as.character(x$variable_id), name_key, sep = "\r")
+  group_key[!has_text(name_key)] <- NA_character_
+
+  for (col in c("PlantCyc.ID", "BIOCYC.ID", "KEGG.ID")) {
+    if (!col %in% colnames(x)) {
+      x[[col]] <- NA_character_
+    }
+    fill_by_group <- vapply(seq_len(nrow(x)), function(i) {
+      key <- group_key[i]
+      if (!has_text(key)) {
+        return(NA_character_)
+      }
+      metminer_collapse_annotation_ids(x[[col]][group_key == key])
+    }, character(1))
+    missing <- !has_text(x[[col]]) & has_text(fill_by_group)
+    x[[col]][missing] <- fill_by_group[missing]
+  }
+
+  plant_missing <- !has_text(x$PlantCyc.ID) & has_text(x$BIOCYC.ID)
+  x$PlantCyc.ID[plant_missing] <- x$BIOCYC.ID[plant_missing]
+  biocyc_missing <- !has_text(x$BIOCYC.ID) & has_text(x$PlantCyc.ID)
+  x$BIOCYC.ID[biocyc_missing] <- x$PlantCyc.ID[biocyc_missing]
   x
 }
 
@@ -1884,6 +2226,7 @@ metminer_select_top_annotation_candidates <- function(object, mode = c("positive
   candidates$Level <- suppressWarnings(as.integer(candidates$Level))
   candidates$Total.score <- suppressWarnings(as.numeric(candidates$Total.score))
   candidates <- metminer_add_annotation_layer_columns(candidates, mode, adduct_advice)
+  candidates <- metminer_fill_same_compound_annotation_ids(candidates)
   candidates <- candidates[candidates$strict_genome_adduct_pass %in% TRUE, , drop = FALSE]
   if (nrow(candidates) == 0) {
     return(data.frame())

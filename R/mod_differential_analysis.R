@@ -244,8 +244,11 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
       })
     })
 
-    observeEvent(plotly::event_data("plotly_click", source = "dam_volcano"), {
-      click <- plotly::event_data("plotly_click", source = "dam_volcano")
+    observeEvent({
+      req(isTRUE(input$interactive_volcano), state$result)
+      suppressWarnings(plotly::event_data("plotly_click", source = "dam_volcano", priority = "event"))
+    }, {
+      click <- suppressWarnings(plotly::event_data("plotly_click", source = "dam_volcano", priority = "event"))
       if (!is.null(click$key) && has_text(click$key)) {
         state$selected_feature <- as.character(click$key[1])
       }

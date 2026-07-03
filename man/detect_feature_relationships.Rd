@@ -35,7 +35,8 @@ detect_feature_relationships(
 
 \item{rt_tolerance}{Retention time tolerance in seconds.}
 
-\item{cor_cutoff}{Minimum abundance correlation across samples.}
+\item{cor_cutoff}{Abundance correlation used as the full-support reference
+for edge scoring. It is not used as a hard filter for within-mode edges.}
 
 \item{cor_method}{Correlation method passed to `stats::cor()`.}
 

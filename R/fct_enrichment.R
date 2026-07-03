@@ -219,7 +219,8 @@ metminer_read_query_ids <- function(path = NULL, id_column = NULL) {
 }
 
 metminer_query_ids_from_annotation_filter <- function(filter_result, id_column = "KEGG.ID",
-                                                      table = c("collapse", "expand", "final")) {
+                                                      table = c("collapse", "expand", "final"),
+                                                      pathway_database = NULL) {
   table <- match.arg(table)
   if (is.null(filter_result)) return(character())
   x <- switch(
@@ -228,9 +229,147 @@ metminer_query_ids_from_annotation_filter <- function(filter_result, id_column =
     expand = filter_result$expand_table,
     final = filter_result$final_table
   )
-  if (is.null(x) || nrow(x) == 0 || !id_column %in% colnames(x)) return(character())
+  if (is.null(x) || nrow(x) == 0) return(character())
+  x <- metminer_fill_enrichment_ids_from_plantcyc_metadata(
+    x,
+    id_column = id_column,
+    pathway_database = pathway_database
+  )
+  if (!id_column %in% colnames(x)) return(character())
   ids <- trimws(as.character(x[[id_column]]))
   unique(ids[has_text(ids)])
+}
+
+metminer_enrichment_norm_text <- function(x) {
+  x <- as.character(x %||% NA_character_)
+  if (exists("metminer_plantcyc_decode_html", mode = "function")) {
+    x <- metminer_plantcyc_decode_html(x)
+  }
+  x <- tolower(trimws(x))
+  x <- gsub("<[^>]+>", " ", x, perl = TRUE)
+  x <- gsub("\\b(alpha|beta|gamma|delta|cis|trans|dl|d|l|r|s|o|n)\\b", " ", x, perl = TRUE)
+  x <- gsub("[()\\[\\]{}]", " ", x, perl = TRUE)
+  x <- gsub("[^a-z0-9]+", " ", x, perl = TRUE)
+  x <- gsub("\\s+", " ", x, perl = TRUE)
+  trimws(x)
+}
+
+metminer_enrichment_split_names <- function(...) {
+  x <- unlist(list(...), use.names = FALSE)
+  x <- as.character(x %||% character())
+  x <- unlist(strsplit(x, "\\s*(//|\\{\\}|;|\\|)\\s*", perl = TRUE), use.names = FALSE)
+  x <- trimws(x)
+  unique(x[has_text(x)])
+}
+
+metminer_plantcyc_manifest_prefix <- function(pathway_database = NULL) {
+  organism <- tryCatch(pathway_database@database_info$organism %||% NA_character_, error = function(e) NA_character_)
+  manifest_file <- system.file("extdata", "plantcyc_pgdb_tables", "plantcyc_pgdb_manifest.tsv", package = "MetMiner")
+  if (!has_text(manifest_file) || !file.exists(manifest_file)) {
+    manifest_file <- file.path("inst", "extdata", "plantcyc_pgdb_tables", "plantcyc_pgdb_manifest.tsv")
+  }
+  if (!file.exists(manifest_file)) return(NA_character_)
+  manifest <- utils::read.delim(manifest_file, stringsAsFactors = FALSE, check.names = FALSE)
+  if (nrow(manifest) == 0) return(NA_character_)
+  if (has_text(organism) && "organism" %in% colnames(manifest)) {
+    org_key <- metminer_enrichment_norm_text(organism)
+    hit <- which(metminer_enrichment_norm_text(manifest$organism) == org_key)
+    if (length(hit) > 0) return(manifest$prefix[hit[1]])
+  }
+  NA_character_
+}
+
+metminer_read_plantcyc_metadata_for_enrichment <- function(pathway_database = NULL) {
+  prefix <- metminer_plantcyc_manifest_prefix(pathway_database)
+  if (!has_text(prefix)) return(data.frame())
+  table_file <- system.file("extdata", "plantcyc_pgdb_tables", paste0(prefix, "_compound_metadata.tsv"), package = "MetMiner")
+  if (!has_text(table_file) || !file.exists(table_file)) {
+    table_file <- file.path("inst", "extdata", "plantcyc_pgdb_tables", paste0(prefix, "_compound_metadata.tsv"))
+  }
+  if (!file.exists(table_file)) return(data.frame())
+  utils::read.delim(table_file, stringsAsFactors = FALSE, check.names = FALSE, quote = "", comment.char = "")
+}
+
+metminer_plantcyc_metadata_name_index <- function(pathway_database = NULL) {
+  meta <- metminer_read_plantcyc_metadata_for_enrichment(pathway_database)
+  if (nrow(meta) == 0) return(data.frame())
+  for (col in c("PlantCyc.ID", "Lab.ID", "Compound.name", "Synonyms", "Formula", "mz", "filter_reason", "ms2_filter_reason")) {
+    if (!col %in% colnames(meta)) meta[[col]] <- NA_character_
+  }
+  rows <- lapply(seq_len(nrow(meta)), function(i) {
+    names_i <- metminer_enrichment_split_names(meta$Compound.name[i], meta$Synonyms[i], meta$Lab.ID[i], meta$PlantCyc.ID[i])
+    if (length(names_i) == 0) return(NULL)
+    data.frame(
+      name_key = metminer_enrichment_norm_text(names_i),
+      matched_name = names_i,
+      PlantCyc.ID = as.character(meta$PlantCyc.ID[i]),
+      Lab.ID = as.character(meta$Lab.ID[i]),
+      Compound.name = as.character(meta$Compound.name[i]),
+      Synonyms = as.character(meta$Synonyms[i]),
+      Formula = as.character(meta$Formula[i]),
+      plantcyc_mz = suppressWarnings(as.numeric(meta$mz[i])),
+      filter_reason = as.character(meta$filter_reason[i]),
+      ms2_filter_reason = as.character(meta$ms2_filter_reason[i]),
+      stringsAsFactors = FALSE
+    )
+  })
+  rows <- rows[!vapply(rows, is.null, logical(1))]
+  if (length(rows) == 0) return(data.frame())
+  idx <- do.call(rbind, rows)
+  idx <- idx[has_text(idx$name_key) & has_text(idx$PlantCyc.ID), , drop = FALSE]
+  idx <- idx[!duplicated(paste(idx$name_key, idx$PlantCyc.ID, sep = "\r")), , drop = FALSE]
+  rownames(idx) <- NULL
+  idx
+}
+
+metminer_fill_enrichment_ids_from_plantcyc_metadata <- function(x,
+                                                               id_column = "KEGG.ID",
+                                                               pathway_database = NULL,
+                                                               mass_tolerance_da = 0.02,
+                                                               mass_tolerance_ppm = 20) {
+  x <- metminer_standardize_enrichment_columns(x)
+  if (!identical(id_column, "PlantCyc.ID") || nrow(x) == 0) return(x)
+  if (!"PlantCyc.ID" %in% colnames(x)) x$PlantCyc.ID <- NA_character_
+  if (!"Compound.name" %in% colnames(x)) x$Compound.name <- NA_character_
+  idx <- metminer_plantcyc_metadata_name_index(pathway_database)
+  if (nrow(idx) == 0) return(x)
+
+  plant <- trimws(as.character(x$PlantCyc.ID))
+  compound_name <- as.character(x$Compound.name)
+  mz <- if ("mz" %in% colnames(x)) suppressWarnings(as.numeric(x$mz)) else rep(NA_real_, nrow(x))
+  fill_source <- rep(NA_character_, nrow(x))
+  matched_name <- rep(NA_character_, nrow(x))
+
+  need <- !has_text(plant) & has_text(compound_name)
+  for (i in which(need)) {
+    name_keys <- metminer_enrichment_norm_text(metminer_enrichment_split_names(compound_name[i]))
+    hit <- idx[idx$name_key %in% name_keys, , drop = FALSE]
+    if (nrow(hit) == 0) next
+    if (!is.na(mz[i])) {
+      hit$mass_error <- abs(hit$plantcyc_mz - mz[i])
+      hit$mass_error_ppm <- hit$mass_error * 1e6 / ifelse(hit$plantcyc_mz < 400, 400, hit$plantcyc_mz)
+      mass_ok <- !is.na(hit$mass_error) & (hit$mass_error <= mass_tolerance_da | hit$mass_error_ppm <= mass_tolerance_ppm)
+      if (any(mass_ok)) hit <- hit[mass_ok, , drop = FALSE]
+    }
+    hit <- hit[order(!has_text(hit$filter_reason), hit$filter_reason, hit$PlantCyc.ID), , drop = FALSE]
+    plant[i] <- hit$PlantCyc.ID[1]
+    fill_source[i] <- if (has_text(hit$filter_reason[1])) {
+      paste0("plantcyc_metadata_name_mass_removed:", hit$filter_reason[1])
+    } else {
+      "plantcyc_metadata_name_mass"
+    }
+    matched_name[i] <- hit$matched_name[1]
+  }
+
+  x$PlantCyc.ID <- plant
+  if (any(has_text(fill_source))) {
+    if (!"PlantCyc.ID.source" %in% colnames(x)) x$PlantCyc.ID.source <- NA_character_
+    if (!"PlantCyc.ID.matched_name" %in% colnames(x)) x$PlantCyc.ID.matched_name <- NA_character_
+    was_filled <- has_text(fill_source)
+    x$PlantCyc.ID.source[was_filled] <- fill_source[was_filled]
+    x$PlantCyc.ID.matched_name[was_filled] <- matched_name[was_filled]
+  }
+  x
 }
 
 metminer_standardize_enrichment_columns <- function(x) {
@@ -365,6 +504,7 @@ metminer_query_ids_from_differential_result <- function(differential_result,
                                                         annotation_filter_result = NULL,
                                                         annotated_objects = NULL,
                                                         id_column = "KEGG.ID",
+                                                        pathway_database = NULL,
                                                         change_values = c("Up", "Down")) {
   x <- differential_result$result %||% differential_result$table %||% differential_result
   x <- metminer_standardize_enrichment_columns(x)
@@ -382,6 +522,11 @@ metminer_query_ids_from_differential_result <- function(differential_result,
     id_column = id_column,
     annotation_filter_result = annotation_filter_result,
     annotated_objects = annotated_objects
+  )
+  x <- metminer_fill_enrichment_ids_from_plantcyc_metadata(
+    x,
+    id_column = id_column,
+    pathway_database = pathway_database
   )
   if (!id_column %in% colnames(x)) {
     return(list(ids = character(), table = x[0, , drop = FALSE], diagnostics = list(total_rows = total_rows, changed_rows = changed_rows, id_rows = 0, lookup_rows = lookup_rows)))

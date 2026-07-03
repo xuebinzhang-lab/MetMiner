@@ -901,6 +901,7 @@ metminer_plantcyc_build_match_index <- function(clean_compounds) {
     stringsAsFactors = FALSE
   )
   base$inchikey_key <- metminer_plantcyc_normalize_name(base$plantcyc_inchikey)
+  base$inchikey_connectivity_key <- metminer_plantcyc_inchikey_connectivity(base$plantcyc_inchikey)
   base$smiles_key <- metminer_plantcyc_normalize_name(base$plantcyc_smiles)
 
   synonyms <- metminer_plantcyc_split_synonyms(clean_compounds$synonyms)
@@ -932,6 +933,57 @@ metminer_plantcyc_collapse_unique <- function(x) {
   x <- x[has_text(x)]
   x <- unique(x)
   if (length(x) == 0) NA_character_ else paste(x, collapse = "{}")
+}
+
+metminer_plantcyc_formula_counts <- function(formula) {
+  formula <- trimws(as.character(formula %||% NA_character_))
+  if (!has_text(formula)) return(NULL)
+  formula <- gsub("[+-]+$", "", formula, perl = TRUE)
+  pieces <- regmatches(formula, gregexpr("([A-Z][a-z]?)([0-9.]*)", formula, perl = TRUE))[[1]]
+  if (length(pieces) == 0) return(NULL)
+  counts <- numeric()
+  for (piece in pieces) {
+    hit <- regmatches(piece, regexec("^([A-Z][a-z]?)([0-9.]*)$", piece, perl = TRUE))[[1]]
+    if (length(hit) < 3) next
+    value <- if (has_text(hit[3])) suppressWarnings(as.numeric(hit[3])) else 1
+    if (is.na(value)) return(NULL)
+    current <- counts[hit[2]]
+    if (is.na(current)) current <- 0
+    counts[hit[2]] <- current + value
+  }
+  counts
+}
+
+metminer_plantcyc_formula_compatible <- function(plant_formula, public_formula, max_h_delta = 2) {
+  n <- max(length(plant_formula), length(public_formula))
+  plant_formula <- rep_len(as.character(plant_formula %||% NA_character_), n)
+  public_formula <- rep_len(as.character(public_formula %||% NA_character_), n)
+  vapply(seq_len(n), function(i) {
+    a <- metminer_plantcyc_formula_counts(plant_formula[i])
+    b <- metminer_plantcyc_formula_counts(public_formula[i])
+    if (is.null(a) || is.null(b)) return(FALSE)
+    elems <- union(names(a), names(b))
+    non_h <- setdiff(elems, "H")
+    a_non_h <- a[non_h]
+    b_non_h <- b[non_h]
+    a_non_h[is.na(a_non_h)] <- 0
+    b_non_h[is.na(b_non_h)] <- 0
+    same_non_h <- all(a_non_h == b_non_h)
+    h_a <- a["H"]
+    h_b <- b["H"]
+    if (is.na(h_a)) h_a <- 0
+    if (is.na(h_b)) h_b <- 0
+    h_delta <- abs(h_a - h_b)
+    same_non_h && !is.na(h_delta) && h_delta <= max_h_delta
+  }, logical(1))
+}
+
+metminer_plantcyc_inchikey_connectivity <- function(x) {
+  x <- toupper(trimws(as.character(x %||% NA_character_)))
+  out <- rep(NA_character_, length(x))
+  hit <- grepl("^[A-Z]{14}-[A-Z]{10}-[A-Z]$", x)
+  out[hit] <- sub("^([A-Z]{14}-[A-Z]{10})-[A-Z]$", "\\1", x[hit])
+  out
 }
 
 #' Add one library spectrum to a PlantCyc spectra.data list
@@ -971,6 +1023,9 @@ metminer_match_plantcyc_public_ms2 <- function(clean_compounds,
   public <- public_info
   public$source_database <- source_database
   public$source_row <- seq_len(nrow(public))
+  for (col in c("Lab.ID", "Formula", "INCHIKEY.ID", "SMILES.ID", "Compound.name", "Synonyms", "Polarity")) {
+    if (col %in% colnames(public)) public[[col]] <- as.character(public[[col]])
+  }
   public_mz <- suppressWarnings(as.numeric(public$mz))
   public_inchikey <- if ("INCHIKEY.ID" %in% colnames(public)) public$INCHIKEY.ID else NA_character_
   public_smiles <- if ("SMILES.ID" %in% colnames(public)) public$SMILES.ID else NA_character_
@@ -985,10 +1040,12 @@ metminer_match_plantcyc_public_ms2 <- function(clean_compounds,
     candidates$mass_error_ppm <- candidates$mass_error * 1e6 / ifelse(candidates$plantcyc_mw < 400, 400, candidates$plantcyc_mw)
     candidates$formula_match <- !is.na(public$Formula[row_i]) & has_text(public$Formula[row_i]) &
       candidates$plantcyc_formula == public$Formula[row_i]
+    candidates$formula_compatible <- candidates$formula_match |
+      metminer_plantcyc_formula_compatible(candidates$plantcyc_formula, public$Formula[row_i])
     if (match_type != "inchikey") {
       candidates <- candidates[
         isTRUE(nrow(candidates) > 0) &
-          candidates$formula_match &
+          candidates$formula_compatible &
           (candidates$mass_error <= mass_tolerance_da | candidates$mass_error_ppm <= mass_tolerance_ppm),
         ,
         drop = FALSE
@@ -1004,6 +1061,7 @@ metminer_match_plantcyc_public_ms2 <- function(clean_compounds,
       match_type = match_type,
       match_rank = rank,
       formula_match = candidates$formula_match,
+      formula_compatible = candidates$formula_compatible,
       mass_error = candidates$mass_error,
       mass_error_ppm = candidates$mass_error_ppm,
       stringsAsFactors = FALSE
@@ -1019,10 +1077,21 @@ metminer_match_plantcyc_public_ms2 <- function(clean_compounds,
       if (nrow(candidates) > 0) next
     }
 
+    connectivity_key <- metminer_plantcyc_inchikey_connectivity(public_inchikey[i])
+    if (has_text(connectivity_key)) {
+      candidates <- base[
+        base$inchikey_connectivity_key == connectivity_key & has_text(base$inchikey_connectivity_key),
+        ,
+        drop = FALSE
+      ]
+      add_matches(i, candidates, "inchikey_connectivity_formula_mass", 2L)
+      if (length(rows) > 0 && any(rows[[length(rows)]]$public_row == i)) next
+    }
+
     key <- metminer_plantcyc_normalize_name(public_smiles[i])
     if (has_text(key)) {
       candidates <- base[base$smiles_key == key & has_text(base$smiles_key), , drop = FALSE]
-      add_matches(i, candidates, "smiles_formula_mass", 2L)
+      add_matches(i, candidates, "smiles_formula_mass", 3L)
       if (length(rows) > 0 && any(rows[[length(rows)]]$public_row == i)) next
     }
 
@@ -1032,7 +1101,7 @@ metminer_match_plantcyc_public_ms2 <- function(clean_compounds,
     if (length(name_keys) > 0) {
       hit_ids <- unique(name_index$plantcyc_id[name_index$name_key %in% name_keys])
       candidates <- base[base$plantcyc_id %in% hit_ids, , drop = FALSE]
-      add_matches(i, candidates, "name_formula_mass", 3L)
+      add_matches(i, candidates, "name_formula_mass", 4L)
     }
   }
 
@@ -1040,7 +1109,7 @@ metminer_match_plantcyc_public_ms2 <- function(clean_compounds,
     return(data.frame(
       plantcyc_id = character(), public_row = integer(), source_database = character(),
       source_lab_id = character(), source_compound_name = character(), match_type = character(),
-      match_rank = integer(), formula_match = logical(), mass_error = numeric(),
+      match_rank = integer(), formula_match = logical(), formula_compatible = logical(), mass_error = numeric(),
       mass_error_ppm = numeric(), stringsAsFactors = FALSE
     ))
   }
@@ -1112,7 +1181,7 @@ metminer_build_plantcyc_ms2_database <- function(clean_compounds,
     data.frame(
       plantcyc_id = character(), public_row = integer(), source_database = character(),
       source_lab_id = character(), source_compound_name = character(), match_type = character(),
-      match_rank = integer(), formula_match = logical(), mass_error = numeric(),
+      match_rank = integer(), formula_match = logical(), formula_compatible = logical(), mass_error = numeric(),
       mass_error_ppm = numeric(), stringsAsFactors = FALSE
     )
   rownames(match_log) <- NULL

@@ -142,7 +142,7 @@ mod_data_enrich_server <- function(id, global_data, prj_init) {
       )
     })
 
-    make_enrichment_query <- function(id_column) {
+    make_enrichment_query <- function(id_column, pathway_db = NULL) {
       if (identical(input$query_source, "upload")) {
         req(input$query_file)
         ids <- metminer_read_query_ids(input$query_file$datapath, id_column = id_column)
@@ -155,13 +155,15 @@ mod_data_enrich_server <- function(id, global_data, prj_init) {
             positive = global_data$object_pos_annotated,
             negative = global_data$object_neg_annotated
           ),
-          id_column = id_column
+          id_column = id_column,
+          pathway_database = pathway_db
         )
       } else {
         ids <- metminer_query_ids_from_annotation_filter(
           filter_result = global_data$annotation_filter_result,
           id_column = id_column,
-          table = input$annotation_table
+          table = input$annotation_table,
+          pathway_database = pathway_db
         )
         list(ids = ids, table = data.frame(query_id = ids, stringsAsFactors = FALSE))
       }
@@ -172,7 +174,7 @@ mod_data_enrich_server <- function(id, global_data, prj_init) {
       tryCatch({
         pathway_db <- metminer_load_pathway_database(input$pathway_db$datapath)
         id_column <- current_id_column()
-        query <- make_enrichment_query(id_column)
+        query <- make_enrichment_query(id_column, pathway_db = pathway_db)
 
         query_ids <- query$ids
         query_table <- query$table
@@ -272,8 +274,11 @@ mod_data_enrich_server <- function(id, global_data, prj_init) {
       }
     })
 
-    observeEvent(plotly::event_data("plotly_click", source = "enrichment_bubble"), {
-      click <- plotly::event_data("plotly_click", source = "enrichment_bubble", priority = "event")
+    observeEvent({
+      req(nrow(state$result_table) > 0)
+      suppressWarnings(plotly::event_data("plotly_click", source = "enrichment_bubble", priority = "event"))
+    }, {
+      click <- suppressWarnings(plotly::event_data("plotly_click", source = "enrichment_bubble", priority = "event"))
       if (!is.null(click$key) && has_text(click$key)) {
         state$selected_pathway <- as.character(click$key[1])
       }

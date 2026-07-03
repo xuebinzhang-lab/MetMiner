@@ -220,8 +220,17 @@ mod_annotation_server <- function(id, global_data, prj_init) {
       show_progress_modal("Annotating", "Loading databases...", 0)
 
       tryCatch({
+        selected_builtin <- c(input$plantcyc_database %||% character(), input$public_databases %||% character())
+        has_local_dir <- any(has_text(c(
+          input$kegg_database_dir %||% NA_character_,
+          input$custom_database_dir %||% NA_character_
+        )))
+        if (length(selected_builtin) == 0 && !has_local_dir) {
+          stop("Please select at least one annotation database: KEGG folder, PlantCyc DB, public MS2 DB, or customized DB.", call. = FALSE)
+        }
+
         databases <- metminer_collect_annotation_databases(
-          builtin_ids = c(input$plantcyc_database %||% character(), input$public_databases %||% character()),
+          builtin_ids = selected_builtin,
           kegg_dir = input$kegg_database_dir,
           custom_dir = input$custom_database_dir
         )
@@ -245,7 +254,21 @@ mod_annotation_server <- function(id, global_data, prj_init) {
       }, error = function(e) {
         close_progress_modal()
         shinyjs::enable("run_annotation")
-        shinyalert::shinyalert("Error", paste("Annotation failed:", e$message), type = "error")
+        msg <- conditionMessage(e)
+        parent <- e$parent
+        parent_messages <- character()
+        while (!is.null(parent)) {
+          parent_msg <- conditionMessage(parent)
+          if (has_text(parent_msg)) {
+            parent_messages <- c(parent_messages, parent_msg)
+          }
+          parent <- parent$parent
+        }
+        if (length(parent_messages) > 0) {
+          msg <- paste(c(msg, parent_messages), collapse = " | ")
+        }
+        if (!has_text(msg)) msg <- "Unknown annotation error. Please check database selection and input objects."
+        shinyalert::shinyalert("Error", paste("Annotation failed:", msg), type = "error")
       })
     })
 
@@ -292,13 +315,13 @@ mod_annotation_server <- function(id, global_data, prj_init) {
 
     output$table_pos <- DT::renderDataTable({
       req(global_data$object_pos_annotated)
-      DT::datatable(metminer_safe_extract_annotation_table(global_data$object_pos_annotated),
+      DT::datatable(metminer_format_annotation_table_for_display(global_data$object_pos_annotated, mode = "positive"),
                     options = list(scrollX = TRUE, pageLength = 10), rownames = FALSE)
     })
 
     output$table_neg <- DT::renderDataTable({
       req(global_data$object_neg_annotated)
-      DT::datatable(metminer_safe_extract_annotation_table(global_data$object_neg_annotated),
+      DT::datatable(metminer_format_annotation_table_for_display(global_data$object_neg_annotated, mode = "negative"),
                     options = list(scrollX = TRUE, pageLength = 10), rownames = FALSE)
     })
 
@@ -306,7 +329,7 @@ mod_annotation_server <- function(id, global_data, prj_init) {
       filename = "positive_annotation_table.csv",
       content = function(file) {
         req(global_data$object_pos_annotated)
-        utils::write.csv(metminer_safe_extract_annotation_table(global_data$object_pos_annotated), file, row.names = FALSE)
+        utils::write.csv(metminer_format_annotation_table_for_display(global_data$object_pos_annotated, mode = "positive"), file, row.names = FALSE)
       }
     )
 
@@ -314,7 +337,7 @@ mod_annotation_server <- function(id, global_data, prj_init) {
       filename = "negative_annotation_table.csv",
       content = function(file) {
         req(global_data$object_neg_annotated)
-        utils::write.csv(metminer_safe_extract_annotation_table(global_data$object_neg_annotated), file, row.names = FALSE)
+        utils::write.csv(metminer_format_annotation_table_for_display(global_data$object_neg_annotated, mode = "negative"), file, row.names = FALSE)
       }
     )
   })
