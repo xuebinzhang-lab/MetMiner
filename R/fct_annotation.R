@@ -256,6 +256,119 @@ metminer_collect_annotation_databases <- function(builtin_ids = character(),
 
 # ---- Annotation execution ----
 
+metminer_annotation_qc_sample_ids <- function(sample_info) {
+  sample_info <- as.data.frame(sample_info %||% data.frame(), stringsAsFactors = FALSE)
+  if (nrow(sample_info) == 0 || !"sample_id" %in% colnames(sample_info)) {
+    return(character())
+  }
+
+  normalize_label <- function(x) {
+    x <- toupper(trimws(as.character(x %||% NA_character_)))
+    gsub("[^A-Z0-9]+", "", x, perl = TRUE)
+  }
+
+  qc_ids <- character()
+  class_cols <- intersect(c("class", "sample_class", "sample_type", "type"), colnames(sample_info))
+  for (col in class_cols) {
+    label <- normalize_label(sample_info[[col]])
+    is_qc <- label %in% c("QC", "QUALITYCONTROL", "QUALITYCONTROLSAMPLE")
+    qc_ids <- c(qc_ids, as.character(sample_info$sample_id[is_qc]))
+  }
+
+  if (length(qc_ids) == 0) {
+    sid <- as.character(sample_info$sample_id)
+    qc_ids <- sid[grepl("(^|[^A-Za-z0-9])QC([^A-Za-z0-9]|$)|^QC[0-9_-]*$", sid, ignore.case = TRUE, perl = TRUE)]
+  }
+
+  unique(qc_ids[has_text(qc_ids)])
+}
+
+metminer_set_annotation_sample_filter <- function(object, filter_info) {
+  tryCatch({
+    object@other_files$annotation_sample_filter <- filter_info
+    object
+  }, error = function(e) object)
+}
+
+metminer_get_annotation_sample_filter <- function(object) {
+  tryCatch(object@other_files$annotation_sample_filter, error = function(e) NULL)
+}
+
+metminer_prepare_annotation_input <- function(object, mode = NULL) {
+  empty <- list(
+    object = object,
+    removed_qc_ids = character(),
+    samples_before = NA_integer_,
+    samples_after = NA_integer_,
+    message = "No QC samples removed before annotation."
+  )
+  if (is.null(object) || !inherits(object, "mass_dataset")) {
+    return(empty)
+  }
+
+  sample_info <- tryCatch(
+    as.data.frame(massdataset::extract_sample_info(object), stringsAsFactors = FALSE),
+    error = function(e) data.frame()
+  )
+  if (nrow(sample_info) == 0 || !"sample_id" %in% colnames(sample_info)) {
+    return(empty)
+  }
+
+  qc_ids <- intersect(metminer_annotation_qc_sample_ids(sample_info), as.character(sample_info$sample_id))
+  samples_before <- nrow(sample_info)
+  if (length(qc_ids) == 0) {
+    filter_info <- list(
+      removed_qc_ids = character(),
+      removed_qc_count = 0L,
+      samples_before = samples_before,
+      samples_after = samples_before,
+      mode = mode %||% NA_character_,
+      applied = FALSE
+    )
+    object <- metminer_set_annotation_sample_filter(object, filter_info)
+    return(modifyList(empty, list(
+      object = object,
+      samples_before = samples_before,
+      samples_after = samples_before
+    )))
+  }
+
+  keep_ids <- setdiff(as.character(sample_info$sample_id), qc_ids)
+  if (length(keep_ids) == 0) {
+    stop("All samples are QC samples; annotation requires at least one non-QC biological sample.", call. = FALSE)
+  }
+
+  filtered <- tryCatch({
+    active <- massdataset::activate_mass_dataset(object, what = "sample_info")
+    dplyr::filter(active, !sample_id %in% qc_ids)
+  }, error = function(e) {
+    stop("Failed to remove QC samples before annotation: ", conditionMessage(e), call. = FALSE)
+  })
+
+  samples_after <- tryCatch(nrow(massdataset::extract_sample_info(filtered)), error = function(e) length(keep_ids))
+  filter_info <- list(
+    removed_qc_ids = qc_ids,
+    removed_qc_count = length(qc_ids),
+    samples_before = samples_before,
+    samples_after = samples_after,
+    mode = mode %||% NA_character_,
+    applied = TRUE
+  )
+  filtered <- metminer_set_annotation_sample_filter(filtered, filter_info)
+
+  list(
+    object = filtered,
+    removed_qc_ids = qc_ids,
+    samples_before = samples_before,
+    samples_after = samples_after,
+    message = paste0(
+      "Removed ", length(qc_ids), " QC sample",
+      if (length(qc_ids) == 1) "" else "s",
+      " before annotation (", samples_before, " -> ", samples_after, ")."
+    )
+  )
+}
+
 metminer_annotation_database_type <- function(database = NULL, database_id = NA_character_, label = NA_character_) {
   text <- paste(
     as.character(database_id %||% NA_character_),
@@ -600,19 +713,21 @@ metminer_annotation_status <- function(object, databases = character()) {
     return(list(
       total_features = 0, level1 = 0, level2 = 0, level3 = 0,
       annotated = 0, unannotated = 0,
-      databases = databases, table = data.frame()
+      databases = databases, table = data.frame(), sample_filter = NULL
     ))
   }
 
   variable_info <- massdataset::extract_variable_info(object)
   total_features <- nrow(variable_info)
   annotation_table <- metminer_safe_extract_annotation_table(object)
+  sample_filter <- metminer_get_annotation_sample_filter(object)
 
   if (is.null(annotation_table) || nrow(annotation_table) == 0 || !"Level" %in% colnames(annotation_table)) {
     return(list(
       total_features = total_features, level1 = 0, level2 = 0, level3 = 0,
       annotated = 0, unannotated = total_features,
-      databases = databases, table = annotation_table %||% data.frame()
+      databases = databases, table = annotation_table %||% data.frame(),
+      sample_filter = sample_filter
     ))
   }
 
@@ -623,7 +738,8 @@ metminer_annotation_status <- function(object, databases = character()) {
     return(list(
       total_features = total_features, level1 = 0, level2 = 0, level3 = 0,
       annotated = 0, unannotated = total_features,
-      databases = databases, table = annotation_table
+      databases = databases, table = annotation_table,
+      sample_filter = sample_filter
     ))
   }
 
@@ -641,7 +757,8 @@ metminer_annotation_status <- function(object, databases = character()) {
     annotated = annotated,
     unannotated = max(total_features - annotated, 0),
     databases = databases,
-    table = annotation_table
+    table = annotation_table,
+    sample_filter = sample_filter
   )
 }
 
@@ -655,6 +772,18 @@ metminer_format_annotation_status <- function(status, mode = c("positive", "nega
   } else {
     "None"
   }
+  sample_filter_text <- ""
+  if (!is.null(status$sample_filter) && isTRUE(status$sample_filter$applied)) {
+    sample_filter_text <- paste0(
+      "\nAnnotation sample filter: removed ",
+      status$sample_filter$removed_qc_count %||% length(status$sample_filter$removed_qc_ids %||% character()),
+      " QC sample(s) before annotation (",
+      status$sample_filter$samples_before %||% NA_integer_,
+      " -> ",
+      status$sample_filter$samples_after %||% NA_integer_,
+      ")."
+    )
+  }
 
   paste0(
     "-- Metabolite Annotation (", tools::toTitleCase(mode), " Mode) --\n\n",
@@ -664,7 +793,8 @@ metminer_format_annotation_status <- function(status, mode = c("positive", "nega
     "Level 2 features: ", status$level2, "\n",
     "Level 3 features: ", status$level3, "\n",
     "Annotated features (Level 1-3): ", status$annotated, "\n",
-    "Unannotated features: ", status$unannotated
+    "Unannotated features: ", status$unannotated,
+    sample_filter_text
   )
 }
 

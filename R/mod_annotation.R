@@ -181,8 +181,15 @@ mod_annotation_server <- function(id, global_data, prj_init) {
     # ---- Run annotation for one polarity ----
     run_annotation_polarity <- function(mode, obj_in, databases, database_labels) {
       polarity <- if (mode == "positive") "positive" else "negative"
+      prepared <- metminer_prepare_annotation_input(obj_in, mode = polarity)
+      if (length(prepared$removed_qc_ids) > 0) {
+        update_progress_modal(
+          if (mode == "positive") 38 else 73,
+          paste0(tools::toTitleCase(mode), " mode: ", prepared$message)
+        )
+      }
       updated <- metminer_annotate_mass_dataset(
-        object = obj_in, databases = databases, polarity = polarity,
+        object = prepared$object, databases = databases, polarity = polarity,
         ms1.match.ppm = input$ms1_ppm, ms2.match.ppm = input$ms2_ppm,
         rt.match.tol = input$rt_tol, column = input$column,
         candidate.num = input$candidate_num, threads = input$threads
@@ -289,6 +296,7 @@ mod_annotation_server <- function(id, global_data, prj_init) {
         "Layer 1 policy: KEGG/PlantCyc candidates require strict core-adduct support during filtering\n",
         "Layer 2 public MS2 DB: ", if (length(selected_public_labels) > 0) paste(selected_public_labels, collapse = ", ") else "None", "\n",
         "Customized DB folder: ", custom_text, "\n",
+        "Annotation sample policy: QC samples are removed from mass_dataset before annotation.\n",
         "Column: ", toupper(input$column), "\n",
         "MS1 ppm: ", input$ms1_ppm,
         " | MS2 ppm: ", input$ms2_ppm,
