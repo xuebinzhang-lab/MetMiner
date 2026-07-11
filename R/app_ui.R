@@ -86,7 +86,7 @@ app_ui <- function(request) {
         bslib::nav_panel("Filter Annotations", mod_annotation_filter_ui("annotation_filter_1")),
         bslib::nav_panel("AI Annotation Reviewer", mod_ai_annotation_ui("ai_annotation_1")),
         bslib::nav_panel("Merge Data", div(class="p-4", "Placeholder")),
-        bslib::nav_panel("Classification", div(class="p-4", "Placeholder")),
+        bslib::nav_panel("Classification", mod_classification_ui("classification_1")),
         bslib::nav_panel("Differential Analysis", mod_differential_analysis_ui("differential_analysis_1")),
         bslib::nav_panel("Enrichment", mod_data_enrich_ui("data_enrich_1"))
       ),

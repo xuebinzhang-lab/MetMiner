@@ -137,6 +137,20 @@ metminer_kegg_split_names <- function(x) {
   trimws(x[nzchar(trimws(x))])
 }
 
+#' Extract a named DBLINKS value from a KEGG flat-file entry
+#'
+#' @noRd
+metminer_kegg_extract_dblink <- function(dblinks, key) {
+  dblinks <- gsub("\\s+", " ", as.character(dblinks %||% ""), perl = TRUE)
+  if (!nzchar(dblinks)) return(NA_character_)
+  pattern <- paste0("\\b", key, ":\\s*(.*?)(?=\\s+[A-Za-z][A-Za-z0-9_.-]*:|$)")
+  hit <- regmatches(dblinks, regexec(pattern, dblinks, perl = TRUE))[[1]]
+  if (length(hit) < 2) return(NA_character_)
+  value <- trimws(hit[2])
+  value <- gsub("\\s+", "{}", value, perl = TRUE)
+  if (nzchar(value)) value else NA_character_
+}
+
 #' Parse KEGG compound flat files
 #'
 #' @noRd
@@ -165,6 +179,10 @@ metminer_kegg_parse_compound_flat <- function(text) {
       formula = fields$FORMULA %||% NA_character_,
       exact_mass = suppressWarnings(as.numeric(fields$EXACT_MASS %||% NA_character_)),
       mol_weight = suppressWarnings(as.numeric(fields$MOL_WEIGHT %||% NA_character_)),
+      cas_id = metminer_kegg_extract_dblink(fields$DBLINKS, "CAS"),
+      pubchem_sid = metminer_kegg_extract_dblink(fields$DBLINKS, "PubChem"),
+      chebi_id = metminer_kegg_extract_dblink(fields$DBLINKS, "ChEBI"),
+      knapsack_id = metminer_kegg_extract_dblink(fields$DBLINKS, "KNApSAcK"),
       stringsAsFactors = FALSE
     )
   })
@@ -173,6 +191,7 @@ metminer_kegg_parse_compound_flat <- function(text) {
     return(data.frame(
       compound_id = character(), compound_name = character(), synonyms = character(),
       formula = character(), exact_mass = numeric(), mol_weight = numeric(),
+      cas_id = character(), pubchem_sid = character(), chebi_id = character(), knapsack_id = character(),
       stringsAsFactors = FALSE
     ))
   }
@@ -232,27 +251,387 @@ metminer_filter_kegg_compounds <- function(compounds,
   )
 }
 
+#' Add IDs from metpath's bundled KEGG compound database when available
+#'
+#' @noRd
+metminer_enrich_kegg_compounds_metpath <- function(compounds) {
+  compounds <- as.data.frame(compounds, stringsAsFactors = FALSE)
+  if (nrow(compounds) == 0 || !requireNamespace("metpath", quietly = TRUE)) {
+    return(compounds)
+  }
+  env <- new.env(parent = emptyenv())
+  ok <- tryCatch({
+    utils::data("kegg_compound_database", package = "metpath", envir = env)
+    TRUE
+  }, error = function(e) FALSE)
+  if (!isTRUE(ok) || is.null(env$kegg_compound_database)) {
+    return(compounds)
+  }
+  info <- tryCatch(as.data.frame(env$kegg_compound_database@spectra.info, stringsAsFactors = FALSE), error = function(e) data.frame())
+  if (nrow(info) == 0 || !"KEGG.ID" %in% colnames(info)) {
+    return(compounds)
+  }
+
+  info$KEGG.ID <- as.character(info$KEGG.ID)
+  hit <- match(as.character(compounds$compound_id), info$KEGG.ID)
+  fill_col <- function(target, source) {
+    if (!target %in% colnames(compounds)) compounds[[target]] <<- NA_character_
+    if (!source %in% colnames(info)) return(invisible(NULL))
+    value <- as.character(compounds[[target]])
+    source_value <- as.character(info[[source]][hit])
+    fill <- !has_text(value) & !is.na(hit) & has_text(source_value)
+    value[fill] <- source_value[fill]
+    value[!has_text(value)] <- NA_character_
+    compounds[[target]] <<- value
+    invisible(NULL)
+  }
+  fill_col("cas_id", "CAS.ID")
+  fill_col("pubchem_sid", "PubChem.ID")
+  fill_col("hmdb_id", "HMDB.ID")
+  compounds
+}
+
+metminer_kegg_pubchem_cache_read <- function(file, cols) {
+  if (!file.exists(file)) {
+    return(as.data.frame(stats::setNames(rep(list(character()), length(cols)), cols), stringsAsFactors = FALSE))
+  }
+  out <- utils::read.delim(file, check.names = FALSE, quote = "", comment.char = "", stringsAsFactors = FALSE)
+  missing_cols <- setdiff(cols, colnames(out))
+  for (col in missing_cols) out[[col]] <- NA_character_
+  out[, cols, drop = FALSE]
+}
+
+metminer_kegg_pubchem_cache_write <- function(x, file) {
+  if (!dir.exists(dirname(file))) dir.create(dirname(file), recursive = TRUE)
+  utils::write.table(x, file, sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+  invisible(file)
+}
+
+metminer_kegg_pubchem_request_json <- function(url,
+                                               sleep_sec = 1.2,
+                                               timeout_sec = 30,
+                                               max_retries = 3,
+                                               user_agent = "MetMiner KEGG database builder; respectful cached PubChem PUG-REST requests") {
+  if (!requireNamespace("httr2", quietly = TRUE)) {
+    stop("Package 'httr2' is required for PubChem PUG-REST enrichment.", call. = FALSE)
+  }
+  last_error <- NULL
+  for (attempt in seq_len(max_retries)) {
+    resp <- tryCatch({
+      httr2::request(url) |>
+        httr2::req_user_agent(user_agent) |>
+        httr2::req_timeout(timeout_sec) |>
+        httr2::req_error(is_error = function(resp) FALSE) |>
+        httr2::req_perform()
+    }, error = function(e) {
+      last_error <<- e$message
+      NULL
+    })
+    if (!is.null(resp)) {
+      status <- httr2::resp_status(resp)
+      throttling <- httr2::resp_headers(resp)[["x-throttling-control"]] %||% ""
+      if (status >= 200 && status < 300) {
+        Sys.sleep(sleep_sec)
+        return(list(
+          status = status,
+          throttling = throttling,
+          json = httr2::resp_body_json(resp, simplifyVector = TRUE),
+          error = NA_character_
+        ))
+      }
+      last_error <- httr2::resp_body_string(resp)
+      if (status %in% c(403L, 429L)) {
+        Sys.sleep(min(60, sleep_sec * attempt * 5))
+      }
+    }
+    Sys.sleep(min(30, sleep_sec * attempt * 2))
+  }
+  list(status = NA_integer_, throttling = NA_character_, json = NULL, error = last_error %||% "PubChem request failed")
+}
+
+metminer_kegg_pubchem_sid_to_cid <- function(sids,
+                                             cache_dir,
+                                             batch_size = 25,
+                                             sleep_sec = 1.2,
+                                             max_retries = 3) {
+  cols <- c("PubChem.SID", "PubChem.CID")
+  cache_file <- file.path(cache_dir, "pubchem_sid_to_cid.tsv")
+  cache <- metminer_kegg_pubchem_cache_read(cache_file, cols)
+  sids <- unique(as.character(sids))
+  sids <- sids[has_text(sids)]
+  sids <- unique(unlist(strsplit(sids, "\\{\\}|[;,[:space:]]+", perl = TRUE), use.names = FALSE))
+  sids <- sids[grepl("^[0-9]+$", sids)]
+  missing <- setdiff(sids, cache$PubChem.SID)
+  logs <- list()
+  rows <- list()
+  if (length(missing) > 0) {
+    batches <- split(missing, ceiling(seq_along(missing) / batch_size))
+    for (i in seq_along(batches)) {
+      url <- paste0("https://pubchem.ncbi.nlm.nih.gov/rest/pug/substance/sid/", paste(batches[[i]], collapse = ","), "/cids/JSON")
+      req <- metminer_kegg_pubchem_request_json(url, sleep_sec = sleep_sec, max_retries = max_retries)
+      logs[[length(logs) + 1L]] <- data.frame(endpoint = "sid_to_cid", batch = i, n = length(batches[[i]]), status = req$status, throttling = req$throttling, error = req$error, stringsAsFactors = FALSE)
+      info <- req$json$InformationList$Information %||% NULL
+      if (!is.null(info) && length(info) > 0) {
+        info <- as.data.frame(info, stringsAsFactors = FALSE)
+        rows[[length(rows) + 1L]] <- data.frame(
+          PubChem.SID = as.character(info$SID),
+          PubChem.CID = vapply(info$CID, metminer_plantcyc_collapse_unique, character(1)),
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+  }
+  if (length(rows) > 0) {
+    cache <- rbind(cache, do.call(rbind, rows))
+    cache <- cache[has_text(cache$PubChem.SID), , drop = FALSE]
+    cache <- cache[rev(!duplicated(rev(cache$PubChem.SID))), , drop = FALSE]
+    metminer_kegg_pubchem_cache_write(cache, cache_file)
+  }
+  list(mapping = cache, log = if (length(logs) > 0) do.call(rbind, logs) else data.frame())
+}
+
+metminer_kegg_pubchem_cid_properties <- function(cids,
+                                                 cache_dir,
+                                                 batch_size = 25,
+                                                 sleep_sec = 1.2,
+                                                 max_retries = 3) {
+  cols <- c("PubChem.CID", "MolecularFormula", "MolecularWeight", "ExactMass", "MonoisotopicMass", "InChI", "InChIKey", "SMILES", "ConnectivitySMILES", "IUPACName", "XLogP", "TPSA", "Charge")
+  cache_file <- file.path(cache_dir, "pubchem_cid_properties.tsv")
+  cache <- metminer_kegg_pubchem_cache_read(cache_file, cols)
+  cids <- unique(as.character(cids))
+  cids <- unique(unlist(strsplit(cids, "\\{\\}|[;,[:space:]]+", perl = TRUE), use.names = FALSE))
+  cids <- cids[grepl("^[0-9]+$", cids)]
+  missing <- setdiff(cids, cache$PubChem.CID)
+  logs <- list()
+  rows <- list()
+  properties <- paste(c("MolecularFormula", "MolecularWeight", "ExactMass", "MonoisotopicMass", "InChI", "InChIKey", "CanonicalSMILES", "IUPACName", "XLogP", "TPSA", "Charge"), collapse = ",")
+  if (length(missing) > 0) {
+    batches <- split(missing, ceiling(seq_along(missing) / batch_size))
+    for (i in seq_along(batches)) {
+      url <- paste0("https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/", paste(batches[[i]], collapse = ","), "/property/", properties, "/JSON")
+      req <- metminer_kegg_pubchem_request_json(url, sleep_sec = sleep_sec, max_retries = max_retries)
+      logs[[length(logs) + 1L]] <- data.frame(endpoint = "cid_properties", batch = i, n = length(batches[[i]]), status = req$status, throttling = req$throttling, error = req$error, stringsAsFactors = FALSE)
+      props <- req$json$PropertyTable$Properties %||% NULL
+      if (!is.null(props) && length(props) > 0) {
+        props <- as.data.frame(props, stringsAsFactors = FALSE)
+        if ("CID" %in% colnames(props)) colnames(props)[colnames(props) == "CID"] <- "PubChem.CID"
+        missing_cols <- setdiff(cols, colnames(props))
+        for (col in missing_cols) props[[col]] <- NA_character_
+        rows[[length(rows) + 1L]] <- props[, cols, drop = FALSE]
+      }
+    }
+  }
+  if (length(rows) > 0) {
+    cache <- rbind(cache, do.call(rbind, rows))
+    cache$PubChem.CID <- as.character(cache$PubChem.CID)
+    cache <- cache[has_text(cache$PubChem.CID), , drop = FALSE]
+    cache <- cache[rev(!duplicated(rev(cache$PubChem.CID))), , drop = FALSE]
+    metminer_kegg_pubchem_cache_write(cache, cache_file)
+  }
+  list(properties = cache, log = if (length(logs) > 0) do.call(rbind, logs) else data.frame())
+}
+
+metminer_kegg_pubchem_cid_rn <- function(cids,
+                                         cache_dir,
+                                         batch_size = 25,
+                                         sleep_sec = 1.2,
+                                         max_retries = 3) {
+  cols <- c("PubChem.CID", "CAS.ID")
+  cache_file <- file.path(cache_dir, "pubchem_cid_cas.tsv")
+  cache <- metminer_kegg_pubchem_cache_read(cache_file, cols)
+  cids <- unique(as.character(cids))
+  cids <- unique(unlist(strsplit(cids, "\\{\\}|[;,[:space:]]+", perl = TRUE), use.names = FALSE))
+  cids <- cids[grepl("^[0-9]+$", cids)]
+  missing <- setdiff(cids, cache$PubChem.CID)
+  logs <- list()
+  rows <- list()
+  if (length(missing) > 0) {
+    batches <- split(missing, ceiling(seq_along(missing) / batch_size))
+    for (i in seq_along(batches)) {
+      url <- paste0("https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/", paste(batches[[i]], collapse = ","), "/xrefs/RN/JSON")
+      req <- metminer_kegg_pubchem_request_json(url, sleep_sec = sleep_sec, max_retries = max_retries)
+      logs[[length(logs) + 1L]] <- data.frame(endpoint = "cid_cas", batch = i, n = length(batches[[i]]), status = req$status, throttling = req$throttling, error = req$error, stringsAsFactors = FALSE)
+      info <- req$json$InformationList$Information %||% NULL
+      if (!is.null(info) && length(info) > 0) {
+        info <- as.data.frame(info, stringsAsFactors = FALSE)
+        rows[[length(rows) + 1L]] <- data.frame(
+          PubChem.CID = as.character(info$CID),
+          CAS.ID = vapply(info$RN, metminer_plantcyc_collapse_unique, character(1)),
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+  }
+  if (length(rows) > 0) {
+    cache <- rbind(cache, do.call(rbind, rows))
+    cache <- cache[has_text(cache$PubChem.CID), , drop = FALSE]
+    cache <- cache[rev(!duplicated(rev(cache$PubChem.CID))), , drop = FALSE]
+    metminer_kegg_pubchem_cache_write(cache, cache_file)
+  }
+  list(rn = cache, log = if (length(logs) > 0) do.call(rbind, logs) else data.frame())
+}
+
+metminer_enrich_kegg_compounds_pubchem <- function(compounds,
+                                                   cache_dir,
+                                                   batch_size = 25,
+                                                   sleep_sec = 1.2,
+                                                   max_retries = 3) {
+  compounds <- as.data.frame(compounds, stringsAsFactors = FALSE)
+  for (col in c("pubchem_cid", "inchi_id", "inchikey_id", "smiles_id", "iupac_name")) {
+    if (!col %in% colnames(compounds)) compounds[[col]] <- NA_character_
+  }
+  if (nrow(compounds) == 0 || !"pubchem_sid" %in% colnames(compounds) || !any(has_text(compounds$pubchem_sid))) {
+    return(list(compounds = compounds, log = data.frame()))
+  }
+
+  sid <- metminer_kegg_pubchem_sid_to_cid(compounds$pubchem_sid, cache_dir, batch_size, sleep_sec, max_retries)
+  sid_map <- sid$mapping
+  sid_hit <- match(as.character(compounds$pubchem_sid), sid_map$PubChem.SID)
+  fill_cid <- !has_text(compounds$pubchem_cid) & !is.na(sid_hit)
+  compounds$pubchem_cid[fill_cid] <- sid_map$PubChem.CID[sid_hit[fill_cid]]
+
+  prop <- metminer_kegg_pubchem_cid_properties(compounds$pubchem_cid, cache_dir, batch_size, sleep_sec, max_retries)
+  rn <- metminer_kegg_pubchem_cid_rn(compounds$pubchem_cid, cache_dir, batch_size, sleep_sec, max_retries)
+
+  first_cid <- vapply(strsplit(as.character(compounds$pubchem_cid), "\\{\\}|[;,[:space:]]+", perl = TRUE), function(x) {
+    x <- x[grepl("^[0-9]+$", x)]
+    if (length(x) == 0) NA_character_ else x[1]
+  }, character(1))
+  prop_hit <- match(first_cid, prop$properties$PubChem.CID)
+  rn_hit <- match(first_cid, rn$rn$PubChem.CID)
+  fill_from <- function(target, source_table, source_col, hit) {
+    if (!target %in% colnames(compounds)) compounds[[target]] <<- NA_character_
+    if (nrow(source_table) == 0 || !source_col %in% colnames(source_table)) return(invisible(NULL))
+    value <- as.character(compounds[[target]])
+    source_value <- as.character(source_table[[source_col]][hit])
+    fill <- !has_text(value) & !is.na(hit) & has_text(source_value)
+    value[fill] <- source_value[fill]
+    value[!has_text(value)] <- NA_character_
+    compounds[[target]] <<- value
+    invisible(NULL)
+  }
+  fill_from("formula", prop$properties, "MolecularFormula", prop_hit)
+  fill_from("exact_mass", prop$properties, "ExactMass", prop_hit)
+  fill_from("inchi_id", prop$properties, "InChI", prop_hit)
+  fill_from("inchikey_id", prop$properties, "InChIKey", prop_hit)
+  fill_from("smiles_id", prop$properties, "ConnectivitySMILES", prop_hit)
+  fill_from("iupac_name", prop$properties, "IUPACName", prop_hit)
+  fill_from("cas_id", rn$rn, "CAS.ID", rn_hit)
+
+  list(
+    compounds = compounds,
+    log = rbind(
+      sid$log,
+      prop$log,
+      rn$log
+    )
+  )
+}
+
+metminer_kegg_classyfire_cache_file <- function() {
+  file.path(tools::R_user_dir("MetMiner", which = "cache"), "kegg_classyfire", "kegg_classyfire_local.tsv")
+}
+
+metminer_kegg_as_classyfire_compounds <- function(compounds) {
+  mz <- suppressWarnings(as.numeric(compounds$mz %||% compounds$exact_mass %||% compounds$mol_weight))
+  data.frame(
+    compound_id = compounds$compound_id,
+    compound_name = compounds$compound_name,
+    formula = compounds$formula,
+    monoisotopic_mw = as.character(mz),
+    smiles = if ("smiles_id" %in% colnames(compounds)) compounds$smiles_id else NA_character_,
+    inchi_key = if ("inchikey_id" %in% colnames(compounds)) compounds$inchikey_id else NA_character_,
+    source = "KEGG organism database",
+    stringsAsFactors = FALSE
+  )
+}
+
+metminer_attach_kegg_classyfire_columns <- function(compounds, classified_compounds) {
+  cols <- metminer_plantcyc_classyfire_cols()
+  for (col in cols) {
+    if (!col %in% colnames(compounds)) compounds[[col]] <- NA_character_
+  }
+  if (nrow(compounds) == 0 || nrow(classified_compounds) == 0) {
+    return(compounds)
+  }
+  hit <- match(compounds$compound_id, classified_compounds$compound_id)
+  for (col in cols) {
+    value <- as.character(compounds[[col]])
+    source_value <- if (col %in% colnames(classified_compounds)) as.character(classified_compounds[[col]][hit]) else NA_character_
+    fill <- !has_text(value) & !is.na(hit) & has_text(source_value)
+    value[fill] <- source_value[fill]
+    value[!has_text(value)] <- NA_character_
+    compounds[[col]] <- value
+  }
+  compounds
+}
+
+metminer_add_classyfire_to_kegg_compounds <- function(compounds,
+                                                      cache_dir,
+                                                      sleep_sec = 2,
+                                                      max_retries = 3,
+                                                      local_cache_file = metminer_kegg_classyfire_cache_file()) {
+  classyfire_input <- metminer_kegg_as_classyfire_compounds(compounds)
+  result <- metminer_add_classyfire_to_compounds(
+    clean_compounds = classyfire_input,
+    cache_dir = cache_dir,
+    sleep_sec = sleep_sec,
+    max_retries = max_retries,
+    local_cache_file = local_cache_file
+  )
+  list(
+    compounds = metminer_attach_kegg_classyfire_columns(compounds, result$compounds),
+    classification = result$classification,
+    local_cache_file = result$local_cache_file,
+    local_cache_hits = result$local_cache_hits,
+    cfb_queries = result$cfb_queries
+  )
+}
+
 #' Create metid spectra.info for KEGG compounds
 #'
 #' @noRd
 metminer_kegg_spectra_info <- function(compounds) {
+  get_col <- function(name, fallback = NA_character_) {
+    if (name %in% colnames(compounds)) return(compounds[[name]])
+    rep(fallback[1], nrow(compounds))
+  }
+  mz <- suppressWarnings(as.numeric(get_col("mz", NA_character_)))
+  exact_mass <- suppressWarnings(as.numeric(get_col("exact_mass", NA_character_)))
+  mol_weight <- suppressWarnings(as.numeric(get_col("mol_weight", NA_character_)))
+  mz[is.na(mz)] <- exact_mass[is.na(mz)]
+  mz[is.na(mz)] <- mol_weight[is.na(mz)]
   data.frame(
     Lab.ID = compounds$compound_id,
     Compound.name = compounds$compound_name,
-    mz = as.numeric(compounds$mz),
+    mz = mz,
     RT = NA_real_,
-    CAS.ID = NA_character_,
-    HMDB.ID = NA_character_,
+    CAS.ID = get_col("cas_id"),
+    HMDB.ID = get_col("hmdb_id"),
     KEGG.ID = compounds$compound_id,
+    PubChem.ID = get_col("pubchem_sid"),
+    PubChem.SID = get_col("pubchem_sid"),
+    PubChem.CID = get_col("pubchem_cid"),
+    ChEBI.ID = get_col("chebi_id"),
+    KNApSAcK.ID = get_col("knapsack_id"),
     Formula = compounds$formula,
     mz.pos = NA_real_,
     mz.neg = NA_real_,
     Submitter = "KEGG <https://www.kegg.jp/>",
     Synonyms = compounds$synonyms,
-    monisotopic_molecular_weight = as.numeric(compounds$mz),
-    SMILES.ID = NA_character_,
-    INCHI.ID = NA_character_,
-    INCHIKEY.ID = NA_character_,
+    monisotopic_molecular_weight = mz,
+    SMILES.ID = get_col("smiles_id"),
+    INCHI.ID = get_col("inchi_id"),
+    INCHIKEY.ID = get_col("inchikey_id"),
+    IUPAC.name = get_col("iupac_name"),
+    Kingdom = get_col("Kingdom"),
+    Super_class = get_col("Super_class"),
+    Class = get_col("Class"),
+    Sub_class = get_col("Sub_class"),
+    direct_parent = get_col("direct_parent"),
+    molecular_framework = get_col("molecular_framework"),
+    classyfire_status = get_col("classyfire_status"),
+    classyfire_source = get_col("classyfire_source"),
     source = "KEGG reaction-supported organism database",
     stringsAsFactors = FALSE
   )
@@ -453,6 +832,7 @@ metminer_build_kegg_ms2_database <- function(compounds,
 
   kegg_info <- metminer_kegg_spectra_info(compounds)
   all_matches <- list()
+  public_classification <- list()
   spectra_data <- list(Spectra.positive = list(), Spectra.negative = list())
 
   for (db_id in builtin_databases) {
@@ -470,6 +850,11 @@ metminer_build_kegg_ms2_database <- function(compounds,
     )
     if (nrow(matches) == 0) next
     all_matches[[source_database]] <- matches
+    public_classification[[source_database]] <- metminer_public_ms2_classification_rows(
+      matches = matches,
+      public_info = public_info,
+      target_col = "kegg_id"
+    )
 
     for (i in seq_len(nrow(matches))) {
       public_row <- matches$public_row[i]
@@ -502,6 +887,10 @@ metminer_build_kegg_ms2_database <- function(compounds,
 
   ms2_ids <- unique(c(names(spectra_data$Spectra.positive), names(spectra_data$Spectra.negative)))
   spectra_info <- kegg_info[kegg_info$Lab.ID %in% ms2_ids, , drop = FALSE]
+  if (length(public_classification) > 0) {
+    class_rows <- do.call(rbind, public_classification)
+    spectra_info <- metminer_merge_public_ms2_classification(spectra_info, class_rows)
+  }
   if (nrow(spectra_info) > 0 && nrow(match_log) > 0) {
     provenance <- lapply(split(match_log, match_log$kegg_id), function(x) {
       data.frame(
@@ -1058,6 +1447,9 @@ metminer_kegg_existing_database_files <- function(output_dir, organism_code) {
       "_pathway_review_prompt.md",
       "_ms2_match_log.tsv",
       "_ms2_unmatched_compounds.tsv",
+      "_pubchem_pugrest_log.tsv",
+      "_classyfire_classification.tsv",
+      "_clean_compounds_with_classyfire.tsv",
       "_summary.tsv"
     )))
   )
@@ -1110,6 +1502,8 @@ metminer_load_kegg_organism_database_result <- function(output_dir,
     pathway_review_prompt = pathway_review_prompt,
     ms2_match_log = metminer_kegg_read_tsv_if_exists(path("_ms2_match_log.tsv")),
     ms2_unmatched_compounds = metminer_kegg_read_tsv_if_exists(path("_ms2_unmatched_compounds.tsv")),
+    pubchem_pugrest_log = metminer_kegg_read_tsv_if_exists(path("_pubchem_pugrest_log.tsv")),
+    classyfire_classification = metminer_kegg_read_tsv_if_exists(path("_classyfire_classification.tsv")),
     summary = summary,
     output_dir = output_dir,
     loaded_from_existing = TRUE
@@ -1122,6 +1516,13 @@ metminer_build_kegg_organism_database <- function(organism_code = "zma",
                                                   min_mw = 70,
                                                   max_mw = 1500,
                                                   sleep_sec = 0.3,
+                                                  use_pubchem = FALSE,
+                                                  pubchem_sleep_sec = 1.2,
+                                                  pubchem_batch_size = 25,
+                                                  pubchem_max_retries = 3,
+                                                  use_classyfire = FALSE,
+                                                  classyfire_sleep_sec = 2,
+                                                  classyfire_max_retries = 3,
                                                   review_min_reaction_coverage = 0.10,
                                                   review_min_supported_reactions = 5,
                                                   review_min_pathway_specific_compounds = 3,
@@ -1185,6 +1586,7 @@ metminer_build_kegg_organism_database <- function(organism_code = "zma",
   pathway_compound_map <- merge(pathway_compound_map, pathways, by = "pathway_id", all.x = TRUE)
   compound_ids <- unique(pathway_compound_map$compound_id)
   compounds <- metminer_kegg_get_compounds(compound_ids, cache_dir, sleep_sec)
+  compounds <- metminer_enrich_kegg_compounds_metpath(compounds)
   filtered <- metminer_filter_kegg_compounds(compounds, min_mw = min_mw, max_mw = max_mw)
   clean_compounds <- filtered$clean_compounds
   removed_compounds <- filtered$removed_compounds
@@ -1198,6 +1600,33 @@ metminer_build_kegg_organism_database <- function(organism_code = "zma",
     "pathway_id", "pathway_name", "compound_id", "compound_name", "reaction_id", "gene_id", "evidence_type"
   ), drop = FALSE])
   clean_compounds <- clean_compounds[clean_compounds$compound_id %in% unique(pathway_compound_map$compound_id), , drop = FALSE]
+  pubchem_log <- data.frame()
+  classyfire_classification <- data.frame()
+  classyfire_local_cache_hits <- 0
+  classyfire_cfb_queries <- 0
+  if (isTRUE(use_pubchem) || isTRUE(use_classyfire)) {
+    pubchem_result <- metminer_enrich_kegg_compounds_pubchem(
+      compounds = clean_compounds,
+      cache_dir = file.path(output_dir, "pubchem_cache"),
+      batch_size = pubchem_batch_size,
+      sleep_sec = pubchem_sleep_sec,
+      max_retries = pubchem_max_retries
+    )
+    clean_compounds <- pubchem_result$compounds
+    pubchem_log <- pubchem_result$log
+  }
+  if (isTRUE(use_classyfire)) {
+    classyfire_result <- metminer_add_classyfire_to_kegg_compounds(
+      compounds = clean_compounds,
+      cache_dir = file.path(output_dir, "classyfire_cache"),
+      sleep_sec = classyfire_sleep_sec,
+      max_retries = classyfire_max_retries
+    )
+    clean_compounds <- classyfire_result$compounds
+    classyfire_classification <- classyfire_result$classification
+    classyfire_local_cache_hits <- classyfire_result$local_cache_hits
+    classyfire_cfb_queries <- classyfire_result$cfb_queries
+  }
 
   ms1_db <- metminer_build_kegg_ms1_database(clean_compounds, organism_code, organism_name, version)
   ms2_result <- metminer_build_kegg_ms2_database(clean_compounds, organism_code, organism_name, version)
@@ -1248,6 +1677,16 @@ metminer_build_kegg_organism_database <- function(organism_code = "zma",
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
   utils::write.table(ms2_result$unmatched_compounds, file.path(output_dir, paste0("kegg_", organism_code, "_ms2_unmatched_compounds.tsv")),
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+  if (nrow(pubchem_log) > 0) {
+    utils::write.table(pubchem_log, file.path(output_dir, paste0("kegg_", organism_code, "_pubchem_pugrest_log.tsv")),
+                       sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+  }
+  if (nrow(classyfire_classification) > 0) {
+    utils::write.table(classyfire_classification, file.path(output_dir, paste0("kegg_", organism_code, "_classyfire_classification.tsv")),
+                       sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+    utils::write.table(clean_compounds, file.path(output_dir, paste0("kegg_", organism_code, "_clean_compounds_with_classyfire.tsv")),
+                       sep = "\t", quote = FALSE, row.names = FALSE, na = "")
+  }
 
   positive_spectra <- sum(vapply(ms2_db@spectra.data$Spectra.positive, length, integer(1)))
   negative_spectra <- sum(vapply(ms2_db@spectra.data$Spectra.negative, length, integer(1)))
@@ -1259,7 +1698,10 @@ metminer_build_kegg_organism_database <- function(organism_code = "zma",
       "clean_compounds", "removed_compounds", "pathway_compound_links",
       "ms2_compounds", "ms2_positive_compounds", "ms2_negative_compounds",
       "ms2_positive_spectra", "ms2_negative_spectra", "ms2_match_rows",
-      "ms2_unmatched_compounds", "pathways_flagged_for_review"
+      "ms2_unmatched_compounds", "pathways_flagged_for_review",
+      "cas_filled", "pubchem_sid_filled", "pubchem_cid_filled", "inchikey_filled", "smiles_filled",
+      "classyfire_completed", "classyfire_not_found", "classyfire_failed",
+      "classyfire_local_cache_hits", "classyfire_cfb_queries"
     ),
     value = c(
       nrow(pathways), nrow(path_gene), nrow(gene_ko), nrow(gene_ec),
@@ -1268,7 +1710,17 @@ metminer_build_kegg_organism_database <- function(organism_code = "zma",
       nrow(ms2_db@spectra.info), length(ms2_db@spectra.data$Spectra.positive),
       length(ms2_db@spectra.data$Spectra.negative), positive_spectra, negative_spectra,
       nrow(ms2_result$match_log), nrow(ms2_result$unmatched_compounds),
-      sum(pathway_qc$review_flag, na.rm = TRUE)
+      sum(pathway_qc$review_flag, na.rm = TRUE),
+      sum(has_text(clean_compounds$cas_id %||% NA_character_)),
+      sum(has_text(clean_compounds$pubchem_sid %||% NA_character_)),
+      sum(has_text(clean_compounds$pubchem_cid %||% NA_character_)),
+      sum(has_text(clean_compounds$inchikey_id %||% NA_character_)),
+      sum(has_text(clean_compounds$smiles_id %||% NA_character_)),
+      if (nrow(classyfire_classification) > 0) sum(classyfire_classification$classyfire_status == "completed", na.rm = TRUE) else 0,
+      if (nrow(classyfire_classification) > 0) sum(classyfire_classification$classyfire_status %in% c("not_found", "no_data"), na.rm = TRUE) else 0,
+      if (nrow(classyfire_classification) > 0) sum(classyfire_classification$classyfire_status == "failed", na.rm = TRUE) else 0,
+      classyfire_local_cache_hits,
+      classyfire_cfb_queries
     ),
     stringsAsFactors = FALSE
   )
@@ -1302,6 +1754,8 @@ metminer_build_kegg_organism_database <- function(organism_code = "zma",
     pathway_review_prompt = pathway_review_prompt,
     ms2_match_log = ms2_result$match_log,
     ms2_unmatched_compounds = ms2_result$unmatched_compounds,
+    pubchem_pugrest_log = pubchem_log,
+    classyfire_classification = classyfire_classification,
     summary = summary,
     output_dir = output_dir
   )

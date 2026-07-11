@@ -1,0 +1,729 @@
+---
+title: "Feature Annotation Report"
+date: last-modified
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    number-sections: true
+    self-contained: true
+    code-tools: false
+    smooth-scroll: true
+params:
+  work_dir: null
+  metadata: null
+editor:
+  markdown:
+    wrap: sentence
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  fig.width = 10,
+  fig.height = 6
+)
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(plotly)
+library(massdataset)
+
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || all(is.na(x))) y else x
+has_text <- function(x) !is.null(x) && length(x) > 0 && !is.na(x[1]) && nzchar(trimws(as.character(x[1])))
+
+work_dir <- params$work_dir %||% "."
+tables_dir <- file.path(work_dir, "tables")
+status_dir <- file.path(work_dir, "status")
+
+read_tsv <- function(name) {
+  path <- file.path(tables_dir, name)
+  if (!file.exists(path)) return(data.frame())
+  utils::read.delim(path, stringsAsFactors = FALSE, check.names = FALSE, quote = "\"", comment.char = "")
+}
+
+read_json <- function(name) {
+  path <- if (grepl("/", name, fixed = TRUE)) file.path(work_dir, name) else file.path(status_dir, name)
+  if (!file.exists(path) || !requireNamespace("jsonlite", quietly = TRUE)) return(NULL)
+  jsonlite::fromJSON(path, simplifyVector = FALSE)
+}
+
+fmt_int <- function(x) {
+  ifelse(is.na(x), NA_character_, format(as.integer(round(x)), big.mark = ","))
+}
+
+fmt_pct <- function(x) {
+  ifelse(is.na(x), NA_character_, sprintf("%.1f%%", as.numeric(x)))
+}
+
+metric_value <- function(tab, metric, default = NA_real_) {
+  if (nrow(tab) == 0 || !"metric" %in% colnames(tab) || !"value" %in% colnames(tab)) return(default)
+  hit <- which(tab$metric == metric)
+  if (length(hit) == 0) return(default)
+  suppressWarnings(as.numeric(tab$value[hit[1]]))
+}
+
+extract_ids <- function(tab, candidates) {
+  if (nrow(tab) == 0) return(character())
+  col <- intersect(candidates, colnames(tab))[1]
+  if (!has_text(col)) return(character())
+  ids <- unlist(strsplit(paste(as.character(tab[[col]]), collapse = ";"), ";|\\|\\||,|\\s+", perl = TRUE), use.names = FALSE)
+  ids <- trimws(ids)
+  ids <- ids[!is.na(ids) & nzchar(ids)]
+  unique(ids)
+}
+
+plotly_or_static <- function(p, n = 0) {
+  if (is.finite(n) && n <= 1000) {
+    plotly::ggplotly(p) |>
+      plotly::layout(legend = list(orientation = "v"))
+  } else {
+    p
+  }
+}
+
+collapse_text <- function(...) {
+  vals <- unlist(list(...), use.names = FALSE)
+  vals <- trimws(as.character(vals %||% ""))
+  vals <- vals[has_text(vals)]
+  vals <- vals[!duplicated(vals)]
+  paste(vals, collapse = " | ")
+}
+
+top_n_classes <- function(summary_table, dimension, n = 12) {
+  x <- summary_table |>
+    filter(.data$dimension == dimension) |>
+    mutate(
+      class_name = ifelse(
+        !has_text(.data$class_name) | .data$class_name %in% c("Unclassified", "Other"),
+        "Unclassified / Other",
+        .data$class_name
+      )
+    ) |>
+    group_by(.data$dimension, .data$class_name) |>
+    summarise(
+      count = sum(.data$count, na.rm = TRUE),
+      percent = sum(.data$percent, na.rm = TRUE),
+      metabolite_ids = paste(.data$metabolite_ids[has_text(.data$metabolite_ids)], collapse = ";"),
+      compound_names = paste(.data$compound_names[has_text(.data$compound_names)], collapse = ";"),
+      .groups = "drop"
+    ) |>
+    arrange(desc(.data$count), .data$class_name)
+  if (nrow(x) == 0) return(x)
+  if (nrow(x) > n) {
+    classified <- x[x$class_name != "Unclassified / Other", , drop = FALSE]
+    unclassified <- x[x$class_name == "Unclassified / Other", , drop = FALSE]
+    kept <- classified[seq_len(min(n, nrow(classified))), , drop = FALSE]
+    other <- classified[-seq_len(min(n, nrow(classified))), , drop = FALSE]
+    if (nrow(other) > 0) {
+      other_row <- data.frame(
+        dimension = dimension,
+        class_name = "Unclassified / Other",
+        count = sum(c(other$count, unclassified$count), na.rm = TRUE),
+        percent = sum(c(other$percent, unclassified$percent), na.rm = TRUE),
+        metabolite_ids = paste(c(other$metabolite_ids, unclassified$metabolite_ids)[has_text(c(other$metabolite_ids, unclassified$metabolite_ids))], collapse = ";"),
+        compound_names = paste(utils::head(unlist(strsplit(paste(c(other$compound_names, unclassified$compound_names), collapse = ";"), ";", fixed = TRUE)), 50), collapse = ";"),
+        stringsAsFactors = FALSE
+      )
+      x <- rbind(kept, other_row)
+    } else {
+      x <- rbind(kept, unclassified)
+    }
+  }
+  x
+}
+
+pie_plot <- function(summary_table, dimension) {
+  x <- top_n_classes(summary_table, dimension, 12)
+  if (nrow(x) == 0) {
+    return(plotly::plot_ly())
+  }
+  plotly::plot_ly(
+    data = x,
+    labels = ~class_name,
+    values = ~count,
+    type = "pie",
+    text = ~paste0(class_name, " (", count, ", ", sprintf("%.1f", percent), "%)"),
+    hovertext = ~paste0(
+      class_name,
+      "<br>Count: ", count,
+      "<br>Percent: ", sprintf("%.2f", percent), "%",
+      "<br>Examples: ", compound_names
+    ),
+    hoverinfo = "text",
+    textinfo = "percent",
+    sort = FALSE
+  ) |>
+    plotly::layout(
+      title = list(text = paste("ClassyFire", dimension)),
+      legend = list(orientation = "v"),
+      margin = list(l = 10, r = 10, t = 60, b = 10)
+    )
+}
+
+classification_detail_table <- function(sort_by = "Super_class") {
+  if (nrow(final_annotations) == 0) return(data.frame())
+  x <- final_annotations
+  for (col in c("metabolite_id", "compound_name", "Super_class", "Class", "Sub_class", "direct_parent")) {
+    if (!col %in% colnames(x)) x[[col]] <- NA_character_
+  }
+  parent_cols <- intersect(
+    c("direct_parent", "parent_level_1", "parent_level_2", "parent_level_3", "parent_level_4", "parent_level_5"),
+    colnames(x)
+  )
+  parent_levels <- if (length(parent_cols) > 0) {
+    apply(x[, parent_cols, drop = FALSE], 1, function(row) collapse_text(row))
+  } else {
+    rep("", nrow(x))
+  }
+  out <- data.frame(
+    `metabolite id` = as.character(x$metabolite_id),
+    `compound name` = as.character(x$compound_name),
+    `super class` = as.character(x$Super_class),
+    class = as.character(x$Class),
+    subclass = as.character(x$Sub_class),
+    `parent levels` = parent_levels,
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+  for (col in colnames(out)) {
+    out[[col]][!has_text(out[[col]])] <- ""
+  }
+  informative <- !(
+    out[["super class"]] %in% c("", "Unclassified", "Other") &
+      out[["class"]] %in% c("", "Unclassified", "Other") &
+      out[["subclass"]] %in% c("", "Unclassified", "Other")
+  )
+  out <- out[informative, , drop = FALSE]
+  sort_col <- switch(sort_by,
+    Super_class = "super class",
+    Class = "class",
+    Sub_class = "subclass",
+    "super class"
+  )
+  out <- out[order(out[[sort_col]], out[["compound name"]], out[["metabolite id"]]), , drop = FALSE]
+  rownames(out) <- NULL
+  out
+}
+
+load_rda_first <- function(path) {
+  if (!file.exists(path)) return(NULL)
+  e <- new.env(parent = emptyenv())
+  nm <- load(path, envir = e)
+  if (length(nm) == 0) return(NULL)
+  e[[nm[[1]]]]
+}
+
+feature_network_from_object <- function(path) {
+  obj <- load_rda_first(path)
+  if (is.null(obj)) return(data.frame())
+  if (is.data.frame(obj)) return(obj)
+  net <- tryCatch(obj@other_files$feature_network, error = function(e) NULL)
+  if (is.null(net)) return(data.frame())
+  as.data.frame(net, stringsAsFactors = FALSE)
+}
+
+network_display_data <- function(edges, max_edges = 700) {
+  edges <- as.data.frame(edges %||% data.frame(), stringsAsFactors = FALSE)
+  if (nrow(edges) == 0 || !all(c("from", "to") %in% colnames(edges))) {
+    return(list(nodes = data.frame(), edges = data.frame()))
+  }
+  if (!"type" %in% colnames(edges)) edges$type <- "Feature relation"
+  if (!"relation_score" %in% colnames(edges)) edges$relation_score <- NA_real_
+  edges$relation_score <- suppressWarnings(as.numeric(edges$relation_score))
+  edges <- edges[has_text(edges$from) & has_text(edges$to), , drop = FALSE]
+  edges <- edges[order(-ifelse(is.finite(edges$relation_score), edges$relation_score, 0)), , drop = FALSE]
+  if (nrow(edges) > max_edges) edges <- edges[seq_len(max_edges), , drop = FALSE]
+
+  ids <- unique(c(edges$from, edges$to))
+  degree <- sort(table(c(edges$from, edges$to)), decreasing = TRUE)
+  nodes <- data.frame(
+    id = ids,
+    label = ids,
+    value = as.numeric(degree[match(ids, names(degree))]),
+    group = ifelse(grepl("^pos::", ids), "Positive feature",
+      ifelse(grepl("^neg::", ids), "Negative feature", "Feature")
+    ),
+    title = paste0(ids, "<br>Degree: ", as.numeric(degree[match(ids, names(degree))])),
+    stringsAsFactors = FALSE
+  )
+  edge_group <- as.character(edges$type)
+  edge_color <- dplyr::case_when(
+    grepl("isotope", edge_group, ignore.case = TRUE) ~ "#1b9e77",
+    grepl("adduct", edge_group, ignore.case = TRUE) ~ "#7570b3",
+    grepl("isf|fragment", edge_group, ignore.case = TRUE) ~ "#d95f02",
+    grepl("cross", edge_group, ignore.case = TRUE) ~ "#4d4d4d",
+    TRUE ~ "#7f8c8d"
+  )
+  display_edges <- data.frame(
+    from = edges$from,
+    to = edges$to,
+    label = edge_group,
+    title = paste0(
+      edge_group,
+      "<br>", edges$annotation %||% "",
+      "<br>Score: ", sprintf("%.3f", edges$relation_score)
+    ),
+    arrows = "to",
+    color = edge_color,
+    stringsAsFactors = FALSE
+  )
+  list(nodes = nodes, edges = display_edges)
+}
+
+feature_network_widget <- function(edges, title = "Feature network", max_edges = 700) {
+  display <- network_display_data(edges, max_edges = max_edges)
+  if (nrow(display$nodes) == 0 || nrow(display$edges) == 0) {
+    return(plotly::plot_ly() |> plotly::layout(title = list(text = paste(title, "not available"))))
+  }
+  if (requireNamespace("visNetwork", quietly = TRUE)) {
+    return(
+      visNetwork::visNetwork(display$nodes, display$edges, height = "680px", main = title) |>
+        visNetwork::visNodes(shape = "dot", font = list(size = 15)) |>
+        visNetwork::visGroups(groupname = "Positive feature", color = "#2c7fb8") |>
+        visNetwork::visGroups(groupname = "Negative feature", color = "#7a5195") |>
+        visNetwork::visGroups(groupname = "Feature", color = "#7f8c8d") |>
+        visNetwork::visEdges(smooth = FALSE, font = list(align = "middle", size = 10)) |>
+        visNetwork::visOptions(highlightNearest = TRUE, nodesIdSelection = TRUE) |>
+        visNetwork::visInteraction(dragNodes = TRUE, dragView = TRUE, hover = TRUE, tooltipDelay = 80) |>
+        visNetwork::visPhysics(enabled = TRUE, stabilization = TRUE) |>
+        visNetwork::visLegend(useGroups = TRUE, position = "right")
+    )
+  }
+  graph <- network_display_data(edges, max_edges = min(max_edges, 200))
+  p <- ggplot(graph$edges, aes(from, to, color = label)) +
+    geom_count(show.legend = TRUE) +
+    labs(title = title, x = "From", y = "To") +
+    theme_light() +
+    theme(axis.text.x = element_blank(), axis.text.y = element_blank())
+  plotly::ggplotly(p)
+}
+
+ms2_summary <- read_tsv("05.ms2_attachment_summary.tsv")
+network_summary <- read_tsv("06.feature_network_summary.tsv")
+annotation_summary <- read_tsv("07.annotation_summary.tsv")
+filter_summary <- read_tsv("08.annotation_filtering_summary.tsv")
+classification_status <- read_tsv("09.classification_status.tsv")
+classification_summary <- read_tsv("09.classification_summary.tsv")
+classification_records <- read_tsv("09.classification_records.tsv")
+final_annotations <- read_tsv("08.final_annotations.tsv")
+collapse_annotations <- read_tsv("08.collapse_annotations.tsv")
+expand_annotations <- read_tsv("08.expand_annotations.tsv")
+redundancy_audit <- read_tsv("08.redundancy_audit.tsv")
+feature_network_pos <- feature_network_from_object(file.path(work_dir, "objects", "06.object_pos_feature_network.rda"))
+feature_network_neg <- feature_network_from_object(file.path(work_dir, "objects", "06.object_neg_feature_network.rda"))
+feature_network_merged <- feature_network_from_object(file.path(work_dir, "objects", "06.merged_feature_network.rda"))
+
+annotation_status <- read_json("annotation.json")
+filter_status <- read_json("annotation_filtering.json")
+classification_json <- read_json("classification.json")
+resource_plan <- read_json("config/annotation_resources.json")
+
+used_databases <- as.character(unlist(annotation_status$databases %||% character(), use.names = FALSE))
+resource_species <- resource_plan$species %||% list()
+kegg_decision <- resource_plan$resources$kegg$decision %||% NA_character_
+has_species_kegg <- kegg_decision %in% c("existing_database", "build_kegg_organism", "built_in_database")
+kegg_background_ids <- extract_ids(collapse_annotations, c("KEGG.ID", "KEGG_ID", "kegg_id"))
+if (length(kegg_background_ids) == 0) {
+  kegg_background_ids <- extract_ids(expand_annotations, c("KEGG.ID", "KEGG_ID", "kegg_id"))
+}
+if (length(kegg_background_ids) == 0) {
+  kegg_background_ids <- extract_ids(final_annotations, c("KEGG.ID", "KEGG_ID", "kegg_id"))
+}
+use_detected_kegg_warning <- !isTRUE(has_species_kegg) && length(kegg_background_ids) > 0
+resource_table <- data.frame(
+  resource = c("PlantCyc", "KEGG", "Public MS2"),
+  decision = c(
+    resource_plan$resources$plantcyc$decision %||% NA_character_,
+    resource_plan$resources$kegg$decision %||% NA_character_,
+    paste(as.character(unlist(resource_plan$resources$public_ms2 %||% character(), use.names = FALSE)), collapse = "; ")
+  ),
+  reason = c(
+    resource_plan$resources$plantcyc$reason %||% NA_character_,
+    resource_plan$resources$kegg$reason %||% NA_character_,
+    "Public experimental MS/MS libraries are used as broad spectral evidence together with plant knowledge-base candidates."
+  ),
+  stringsAsFactors = FALSE
+)
+
+final_records <- metric_value(filter_summary, "final_records", nrow(final_annotations))
+audit_records <- metric_value(filter_summary, "audit_records", nrow(redundancy_audit))
+dropped_records <- metric_value(filter_summary, "dropped_records")
+cross_removed <- metric_value(filter_summary, "cross_polarity_removed")
+recurrent_flagged <- metric_value(filter_summary, "recurrent_flagged")
+```
+
+::: {.callout-note icon="false" appearance="simple"}
+## Report Information
+
+**Software**: [MetMiner by Wang et al., 2024](https://github.com/ShawnWx2019/MetMiner), powered by [TidyMass2 by Wang et al., 2026](https://www.nature.com/articles/s41467-026-68464-7)
+
+**Date**: `r format(Sys.Date(), '%Y-%m-%d')`
+
+**Generated By**: MetMiner Snakemake pipeline
+:::
+
+------------------------------------------------------------------------
+
+# Introduction
+
+This report summarizes the feature annotation workflow after normalization and feature-network construction.
+It covers MS2 attachment, feature-network evidence, database annotation, non-redundant annotation filtering, and ClassyFire-based classification of the final clean annotation table.
+
+## Annotation Database Strategy
+
+For this project, the reported species is **`r resource_species$common_name %||% "not specified"`** (`r resource_species$latin_name %||% "Latin name not specified"`).
+MetMiner used the following annotation databases:
+
+```{r used-databases}
+database_table <- data.frame(
+  database = used_databases,
+  stringsAsFactors = FALSE
+)
+knitr::kable(database_table, caption = "Annotation databases used in this run.")
+```
+
+```{r resource-plan}
+knitr::kable(resource_table, caption = "Species-aware annotation resource plan.")
+```
+
+MetMiner recommends this layered strategy because plant metabolomics annotation has two different evidence needs.
+First, PlantCyc or species-specific plant databases provide biologically plausible plant metabolites and pathway-aware compound candidates, which helps avoid treating every public-library spectral hit as equally relevant to the organism.
+Second, HMDB, MoNA, and MassBank add experimental MS/MS evidence and broaden coverage when the study species does not yet have a dedicated PlantCyc or KEGG resource.
+The feature-network and redundancy-filtering steps then reduce adduct, isotope, in-source fragment, recurrent-ion, and cross-polarity duplication before the final clean annotation table is used for classification, differential analysis, and enrichment.
+
+```{r kegg-fallback-warning, results='asis'}
+if (isTRUE(use_detected_kegg_warning)) {
+  cat("::: {.callout-warning appearance=\"simple\" icon=\"true\"}\\n")
+  cat("## Exploratory KEGG Enrichment Background Warning\\n\\n")
+  cat("A species-specific KEGG organism database was not available for this run. ")
+  cat("The preferred KEGG enrichment background is the species-specific detectable pathway metabolite universe, built from the organism's KEGG pathways and the compounds that can be annotated under the same LC-MS workflow. ")
+  cat("For this project, MetMiner can only use the **", length(kegg_background_ids), "** KEGG IDs detected in the clean annotation results as a fallback background. ")
+  cat("This detected-ID background is useful for exploratory screening, but it is conditioned on the observed data and annotation coverage, so pathway p-values may have an elevated false-positive rate and should not be interpreted as confirmatory species-level pathway enrichment.\\n")
+  cat(":::\\n")
+}
+```
+
+------------------------------------------------------------------------
+
+# Annotation Overview
+
+::: {.callout-important appearance="simple" icon="false"}
+## Clean Annotation Result
+
+The final non-redundant annotation table contains **`r fmt_int(final_records)`** records.
+The redundancy audit tracked **`r fmt_int(audit_records)`** candidate records, including **`r fmt_int(dropped_records)`** dropped records and **`r fmt_int(cross_removed)`** cross-polarity redundant records.
+Feature-network recurrent context flagged **`r fmt_int(recurrent_flagged)`** records for review.
+:::
+
+```{r annotation-overview-table}
+overview <- data.frame(
+  metric = c(
+    "Final non-redundant records",
+    "Redundancy audit records",
+    "Expand review rows",
+    "Collapse review rows",
+    "Dropped redundant records",
+    "Cross-polarity removed",
+    "Recurrent context flagged"
+  ),
+  value = c(
+    final_records,
+    audit_records,
+    nrow(expand_annotations),
+    nrow(collapse_annotations),
+    dropped_records,
+    cross_removed,
+    recurrent_flagged
+  )
+)
+knitr::kable(overview, caption = "Feature annotation and filtering overview.")
+```
+
+```{r annotation-overview-plot}
+overview_plot_data <- overview |>
+  filter(!is.na(value)) |>
+  mutate(metric = factor(metric, levels = rev(metric)))
+
+p <- ggplot(overview_plot_data, aes(value, metric, fill = metric)) +
+  geom_col(width = 0.65, show.legend = FALSE) +
+  geom_text(aes(label = fmt_int(value)), hjust = -0.08, size = 3.5) +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(x = "Count", y = NULL, title = "Annotation Filtering Summary") +
+  theme_light()
+plotly_or_static(p, max(overview_plot_data$value, na.rm = TRUE))
+```
+
+::: {.callout-tip title="Figure Legend" collapse="true"}
+The bar plot shows the main outputs of annotation filtering.
+Interactive rendering is used when the displayed record count is at or below 1,000; otherwise a static plot is shown.
+:::
+
+------------------------------------------------------------------------
+
+# Step-by-Step Feature Annotation
+
+## MS2 Attachment
+
+The pipeline searches for MGF files generated by the raw conversion step and attaches MS2 spectra to the normalized `mass_dataset` before feature-network detection.
+
+```{r ms2-summary}
+if (nrow(ms2_summary) > 0) {
+  knitr::kable(ms2_summary, caption = "MS2 files and feature-level MS2 attachment summary.")
+} else {
+  cat("No MS2 attachment summary was found.")
+}
+```
+
+## Feature Network
+
+::: {.callout-note appearance="simple" icon="false"}
+## What Is a Feature Network?
+
+In LC-MS data, one real metabolite often appears as several instrument signals instead of one clean peak.
+These extra signals can come from natural isotopes, different charged forms, salt adducts, fragments made inside the instrument, or the same metabolite observed in positive and negative modes.
+The Feature Network connects signals that probably come from the same original molecule, so MetMiner can avoid counting the same metabolite many times and can choose a cleaner representative annotation for downstream analysis.
+
+For the full technical rationale, see the [Feature Network principles document](https://github.com/xuebinzhang-lab/MetMiner/blob/feature/global-ai-bot/inst/app/feature_network_principles.md).
+:::
+
+Feature-network evidence is used to support recurrent ion inspection, subnetwork roles, pseudo-area aggregation, and downstream redundancy filtering.
+
+```{r feature-network-summary}
+if (nrow(network_summary) > 0) {
+  knitr::kable(network_summary, caption = "Feature-network summary by polarity.")
+} else {
+  cat("No feature-network summary was found.")
+}
+```
+
+```{r feature-network-plot}
+if (nrow(network_summary) > 0 && "mode" %in% colnames(network_summary)) {
+  net <- network_summary |>
+    filter(mode %in% c("positive", "negative")) |>
+    mutate(across(c(n_features, n_edges, n_role_rows, n_pseudo_compounds), as.numeric)) |>
+    pivot_longer(c(n_features, n_edges, n_role_rows, n_pseudo_compounds), names_to = "metric", values_to = "value")
+  p <- ggplot(net, aes(metric, value, fill = mode)) +
+    geom_col(position = "dodge", width = 0.72) +
+    labs(x = NULL, y = "Count", title = "Feature-Network Outputs") +
+    theme_light() +
+    theme(axis.text.x = element_text(angle = 20, hjust = 1))
+  plotly_or_static(p, max(net$value, na.rm = TRUE))
+}
+```
+
+::: {.panel-tabset}
+
+## Positive Network
+
+```{r feature-network-positive-widget}
+feature_network_widget(feature_network_pos, "Positive Feature Network", max_edges = 700)
+```
+
+## Negative Network
+
+```{r feature-network-negative-widget}
+feature_network_widget(feature_network_neg, "Negative Feature Network", max_edges = 700)
+```
+
+## Merged Polarity Network
+
+```{r feature-network-merged-widget}
+feature_network_widget(feature_network_merged, "Merged Positive/Negative Feature Network", max_edges = 900)
+```
+
+:::
+
+::: {.callout-tip title="Network Legend" collapse="true"}
+The interactive feature-network widgets display feature relationships discovered before annotation filtering.
+Nodes are LC-MS features, while edges represent isotope, adduct, in-source fragment, recurrent, or cross-polarity relationships depending on the detected relation type.
+The report displays the highest-scoring subset of large networks to keep the HTML responsive; the complete network is retained in the saved `06.*feature_network*.rda` objects.
+:::
+
+## Database Annotation
+
+Annotation combines species/resource-aware plant databases with public MS2 libraries.
+QC samples are removed before annotation so the biological annotation objects contain only experimental samples.
+
+```{r annotation-summary}
+if (nrow(annotation_summary) > 0) {
+  knitr::kable(annotation_summary, caption = "Database annotation summary.")
+} else {
+  cat("No annotation summary was found.")
+}
+```
+
+```{r annotation-plot}
+if (nrow(annotation_summary) > 0) {
+  ann <- annotation_summary |>
+    mutate(across(c(raw_annotation_rows, display_annotation_rows, annotated_features, removed_qc_count), as.numeric)) |>
+    select(mode, raw_annotation_rows, annotated_features, removed_qc_count) |>
+    pivot_longer(-mode, names_to = "metric", values_to = "value")
+  p <- ggplot(ann, aes(metric, value, fill = mode)) +
+    geom_col(position = "dodge", width = 0.72) +
+    labs(x = NULL, y = "Count", title = "Annotation Candidates and QC Removal") +
+    theme_light() +
+    theme(axis.text.x = element_text(angle = 20, hjust = 1))
+  plotly_or_static(p, max(ann$value, na.rm = TRUE))
+}
+```
+
+## Non-Redundant Filtering
+
+The filtering layer prioritizes annotation confidence, feature-network support, adduct evidence, same-compound redundancy, recurrent ion context, and cross-polarity duplication.
+
+```{r filtering-summary}
+if (nrow(filter_summary) > 0) {
+  knitr::kable(filter_summary, caption = "Annotation filtering and redundancy-removal summary.")
+} else {
+  cat("No annotation filtering summary was found.")
+}
+```
+
+::: {.panel-tabset}
+
+## Final Non-Redundant
+
+```{r final-preview}
+if (nrow(final_annotations) > 0) {
+  cols <- intersect(c("mode", "metabolite_id", "compound_name", "annotation_level", "annotation_layer", "record_type", "representative_feature", "n_features", "rt", "mz"), colnames(final_annotations))
+  knitr::kable(utils::head(final_annotations[, cols, drop = FALSE], 20), caption = "Top rows from the final non-redundant annotation table.")
+} else {
+  cat("No final annotation table was found.")
+}
+```
+
+## Collapse Review
+
+```{r collapse-preview}
+if (nrow(collapse_annotations) > 0) {
+  knitr::kable(utils::head(collapse_annotations, 20), caption = "Top rows from the collapsed review table.")
+} else {
+  cat("No collapse annotation table was found.")
+}
+```
+
+## Expand Review
+
+```{r expand-preview}
+if (nrow(expand_annotations) > 0) {
+  knitr::kable(utils::head(expand_annotations, 20), caption = "Top rows from the expanded review table.")
+} else {
+  cat("No expand annotation table was found.")
+}
+```
+
+:::
+
+------------------------------------------------------------------------
+
+# ClassyFire Classification
+
+The classification summary is calculated from the final clean non-redundant annotations.
+Missing classes are filled from the original annotated objects when possible and reported as `Unclassified` otherwise.
+
+```{r classification-status}
+if (nrow(classification_status) > 0) {
+  knitr::kable(classification_status, caption = "Classification result status.")
+}
+```
+
+::: {.panel-tabset}
+
+## Super Class
+
+```{r super-class-pie}
+pie_plot(classification_summary, "Super_class")
+```
+
+```{r super-class-table}
+knitr::kable(
+  classification_detail_table("Super_class"),
+  caption = "Final annotations with Super_class, Class, Sub_class, and available parent levels."
+)
+```
+
+## Class
+
+```{r class-pie}
+pie_plot(classification_summary, "Class")
+```
+
+```{r class-table}
+knitr::kable(
+  classification_detail_table("Class"),
+  caption = "Final annotations with Super_class, Class, Sub_class, and available parent levels."
+)
+```
+
+## Sub Class
+
+```{r subclass-pie}
+pie_plot(classification_summary, "Sub_class")
+```
+
+```{r subclass-table}
+knitr::kable(
+  classification_detail_table("Sub_class"),
+  caption = "Final annotations with Super_class, Class, Sub_class, and available parent levels."
+)
+```
+
+:::
+
+::: {.callout-tip title="Figure Legend" collapse="true"}
+Pie charts summarize the final non-redundant annotation table across ClassyFire Super_class, Class, and Sub_class dimensions.
+Categories beyond the top 12 are grouped as `Other`.
+Pie charts are rendered as interactive plotly charts.
+:::
+
+------------------------------------------------------------------------
+
+# Output Tables
+
+```{r output-table-list}
+outputs <- data.frame(
+  output = c(
+    "08.final_annotations.tsv",
+    "08.expand_annotations.tsv",
+    "08.collapse_annotations.tsv",
+    "08.redundancy_audit.tsv",
+    "09.classification_records.tsv",
+    "09.classification_summary.tsv"
+  ),
+  rows = c(
+    nrow(final_annotations),
+    nrow(expand_annotations),
+    nrow(collapse_annotations),
+    nrow(redundancy_audit),
+    nrow(classification_records),
+    nrow(classification_summary)
+  ),
+  stringsAsFactors = FALSE
+)
+knitr::kable(outputs, caption = "Downloadable annotation and classification tables.")
+```
+
+<details>
+<summary><strong>Pipeline Status Objects</strong></summary>
+
+```{r status-objects}
+status_overview <- data.frame(
+  step = c("annotation", "annotation_filtering", "classification"),
+  state = c(annotation_status$state %||% NA_character_, filter_status$state %||% NA_character_, classification_json$state %||% NA_character_),
+  updated_at = c(annotation_status$updated_at %||% NA_character_, filter_status$updated_at %||% NA_character_, classification_json$updated_at %||% NA_character_),
+  stringsAsFactors = FALSE
+)
+knitr::kable(status_overview, caption = "Pipeline status metadata.")
+```
+
+</details>

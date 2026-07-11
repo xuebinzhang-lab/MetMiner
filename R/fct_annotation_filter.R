@@ -188,6 +188,11 @@ metminer_build_network_metabolite_rows <- function(roles, hypothesis, feature_in
     compound <- parent$selected_compound[1]
     level <- suppressWarnings(as.integer(parent$metid_level[1]))
     representative_adduct <- if ("selected_adduct" %in% colnames(parent)) parent$selected_adduct[1] else NA_character_
+    class_cols <- c("Kingdom", "Super_class", "Class", "Sub_class", "direct_parent", "molecular_framework", "classyfire_status", "classyfire_source")
+    class_values <- stats::setNames(rep(NA_character_, length(class_cols)), class_cols)
+    for (col in intersect(class_cols, colnames(parent))) {
+      class_values[[col]] <- parent[[col]][1]
+    }
     semi <- !has_text(compound) || is.na(level) || level > min_high_conf_level
     semi_label <- infer_semi_annotation_label(sub_roles)
 
@@ -204,6 +209,14 @@ metminer_build_network_metabolite_rows <- function(roles, hypothesis, feature_in
       compound_name = if (has_text(compound)) as.character(compound) else semi_label,
       annotation_level = level,
       representative_adduct = representative_adduct,
+      Kingdom = class_values[["Kingdom"]],
+      Super_class = class_values[["Super_class"]],
+      Class = class_values[["Class"]],
+      Sub_class = class_values[["Sub_class"]],
+      direct_parent = class_values[["direct_parent"]],
+      molecular_framework = class_values[["molecular_framework"]],
+      classyfire_status = class_values[["classyfire_status"]],
+      classyfire_source = class_values[["classyfire_source"]],
       member_adducts = metminer_collapse_unique_text(sub_roles$selected_adduct),
       member_annotation_levels = metminer_collapse_unique_text(sub_roles$metid_level),
       annotation_layer = "network_integrated",
@@ -259,6 +272,9 @@ metminer_build_single_feature_metabolite_rows <- function(best_feature_annotatio
     strict_core_adduct = core_adduct,
     spectral_match = layer %in% c("public_ms2", "local_spectral_optional", "other_spectral")
   )
+  class_col <- function(col) {
+    if (col %in% colnames(singles)) as.character(singles[[col]]) else rep(NA_character_, nrow(singles))
+  }
 
   data.frame(
     metabolite_id = singles$variable_id,
@@ -269,6 +285,14 @@ metminer_build_single_feature_metabolite_rows <- function(best_feature_annotatio
     compound_name = ifelse(has_text(compound), as.character(compound), "unknown_feature"),
     annotation_level = level,
     representative_adduct = adduct,
+    Kingdom = class_col("Kingdom"),
+    Super_class = class_col("Super_class"),
+    Class = class_col("Class"),
+    Sub_class = class_col("Sub_class"),
+    direct_parent = class_col("direct_parent"),
+    molecular_framework = class_col("molecular_framework"),
+    classyfire_status = class_col("classyfire_status"),
+    classyfire_source = class_col("classyfire_source"),
     member_adducts = adduct,
     member_annotation_levels = as.character(level),
     annotation_layer = layer,

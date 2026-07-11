@@ -31,9 +31,13 @@ MetMiner ships species-specific PlantCyc/PMN local PGDB resources for Arabidopsi
 
 The PlantCyc MS2 builder links public spectra with exact InChIKey matches, InChIKey connectivity plus formula/mass validation, SMILES plus formula/mass validation, and conservative name/synonym matches. Formula compatibility allows small hydrogen-count differences while requiring non-hydrogen atoms to agree, which improves coverage without relying on formula-plus-mass alone.
 
-### 5. Fail-Safe UI & Quarto Automated Reporting
+The KEGG organism database builder keeps the conservative gene/KO/EC-supported reaction strategy while enriching compound metadata from KEGG DBLINKS and the bundled `metpath::kegg_compound_database` when available. Default-off PubChem PUG-REST and ClassyFire options can further add PubChem CID, InChI, InChIKey, SMILES, IUPAC name, CAS/RN cross references, and `Kingdom`/`Super_class`/`Class`/`Sub_class` taxonomy through cached, throttled batch requests that record PubChem throttling headers.
+
+### 5. Clean Annotation Statistics, Classification, and Reporting
+* **Clean metabolite-level DAM:** Differential analysis can run on the final non-redundant annotation table, using feature-network pseudo-areas when available and representative feature areas as fallback.
+* **ClassyFire Summary:** A dedicated Classification page summarizes final annotated metabolites by `Super_class`, `Class`, and `Sub_class`, with interactive/static pie plots and downloadable record/summary tables.
 * **Robust Monitoring:** Shiny-side validation, progress feedback, and chat-native asynchronous status indicators for long-running annotation review tasks.
-* **Automated Quarto Reports:** Generates standardized, publication-ready HTML/PDF reports spanning *Raw Data QC*, *Data Cleaning*, and *Downstream Mining*.
+* **Automated Quarto Reports:** Generates standardized, publication-ready HTML reports spanning *Raw Data QC*, *Data Cleaning*, *Feature Annotation*, and *Differential Analysis + Enrichment*.
 
 ---
 
@@ -60,6 +64,11 @@ The module supports local desktop persistence for provider settings and API keys
 
 Implementation details are documented in `inst/app/ai_annotation_principles.md`.
 
+### Classification and Clean Differential Analysis
+After annotation filtering, MetMiner builds a final non-redundant metabolite table that can be reused by downstream modules. The Classification page reports the ClassyFire composition of this clean table across `Super_class`, `Class`, and `Sub_class`; missing classifications are filled from the original annotated positive/negative objects when possible and are otherwise reported as `Unclassified`.
+
+The Differential Analysis page now defaults to **Clean annotated metabolites** instead of raw feature mode. This mode creates or reloads `08.object_clean_annotated.rda`, removes QC samples, keeps annotation IDs and ClassyFire fields with each metabolite, and uses feature-network pseudo-area values from `06.pseudo_area_pos.rda` and `06.pseudo_area_neg.rda` when available. Original positive, negative, and merged feature-level analysis modes remain available for troubleshooting or method comparison.
+
 ### MetMiner Bot Module Advisors
 MetMiner Bot now includes module-aware advisor commands that can read the active Shiny state and project objects before answering parameter questions. Users can choose an advisor from the Bot command menu or type tags such as `@data-import-advisor`, `@noise-filter-advisor`, `@outlier-advisor`, `@missing-value-advisor`, `@normalization-advisor`, `@feature-network-advisor`, `@annotation-advisor`, `@annotation-filter-advisor`, `@differential-advisor`, `@enrichment-advisor`, and `@database-advisor`.
 
@@ -72,6 +81,14 @@ Implementation details are documented in `inst/app/global_ai_bot_advisors.md`.
 
 ### Built-in PlantCyc Databases
 The annotation and enrichment modules can use built-in PlantCyc/PMN local PGDB resources for common plant species. PlantCyc annotation tables now carry database source type, database label, annotation layer, evidence scope, core-adduct status, and confidence fields so downstream filtering, AI review, and pathway enrichment can separate genome-informed candidates from spectral evidence.
+
+ClassyFire metadata is carried by refreshed PlantCyc resources when available, including `Kingdom`, `Super_class`, `Class`, and `Sub_class` fields in compound metadata and MS1/MS2 database objects.
+
+### KEGG, PubChem, and ClassyFire Database Construction
+The KEGG organism database builder starts from gene/KO/EC-supported reactions and pathway evidence rather than broad reference pathway compound lists. It preserves KEGG DBLINKS metadata such as CAS, PubChem SID, ChEBI, and KNApSAcK IDs, and can optionally run cached PubChem PUG-REST enrichment to add CID, InChI, InChIKey, SMILES, IUPAC name, and CAS/RN cross references. When ClassyFire lookup is enabled, PubChem enrichment is used first to obtain InChIKeys, then cached Fiehn CFB/ClassyFire results fill `Kingdom`, `Super_class`, `Class`, and `Sub_class`.
+
+### Workflow Reports
+MetMiner now keeps report templates aligned with workflow stages: the raw QC report uses the updated TidyMass2 citation, the Data Cleaning report follows raw-to-normalized object progression, the Feature Annotation report covers MS2 attachment, feature-network evidence, annotation filtering, and ClassyFire summaries, and the Differential Analysis + Enrichment report focuses on clean non-redundant metabolites and pathway enrichment outputs.
 
 ---
 

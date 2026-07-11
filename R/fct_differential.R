@@ -1,5 +1,149 @@
 # ---- Differential abundance metabolite helpers ----
 
+metminer_drop_qc_samples <- function(object) {
+  if (is.null(object) || !inherits(object, "mass_dataset")) return(object)
+  sample_info <- tryCatch(massdataset::extract_sample_info(object), error = function(e) data.frame())
+  if (nrow(sample_info) == 0 || !"sample_id" %in% colnames(sample_info)) return(object)
+  qc_cols <- intersect(c("class", "sample_type", "group"), colnames(sample_info))
+  if (length(qc_cols) == 0) return(object)
+  qc <- Reduce(`|`, lapply(qc_cols, function(col) tolower(as.character(sample_info[[col]])) == "qc"))
+  if (!any(qc, na.rm = TRUE)) return(object)
+  object |>
+    massdataset::activate_mass_dataset(what = "sample_info") |>
+    dplyr::filter(!(.data$sample_id %in% sample_info$sample_id[qc]))
+}
+
+metminer_split_feature_ids <- function(x) {
+  x <- as.character(x %||% character())
+  x <- unlist(strsplit(paste(x, collapse = ";"), "[;,|]", perl = TRUE), use.names = FALSE)
+  x <- trimws(x)
+  unique(x[has_text(x)])
+}
+
+metminer_clean_annotation_fill_ids <- function(x) {
+  x <- as.data.frame(x %||% data.frame(), stringsAsFactors = FALSE)
+  if (nrow(x) == 0) return(x)
+  if (!"Compound.name" %in% colnames(x) && "compound_name" %in% colnames(x)) x$Compound.name <- x$compound_name
+  for (col in c("KEGG.ID", "PlantCyc.ID", "Lab.ID")) {
+    if (!col %in% colnames(x)) x[[col]] <- NA_character_
+  }
+  if ("compound_key" %in% colnames(x)) {
+    key <- as.character(x$compound_key)
+    hit <- !has_text(x$KEGG.ID) & grepl("KEGG\\.ID:", key)
+    x$KEGG.ID[hit] <- sub("^.*KEGG\\.ID:([^;|]+).*$", "\\1", key[hit])
+    hit <- !has_text(x$PlantCyc.ID) & grepl("PlantCyc\\.ID:", key)
+    x$PlantCyc.ID[hit] <- sub("^.*PlantCyc\\.ID:([^;|]+).*$", "\\1", key[hit])
+    hit <- !has_text(x$Lab.ID) & grepl("Lab\\.ID:", key)
+    x$Lab.ID[hit] <- sub("^.*Lab\\.ID:([^;|]+).*$", "\\1", key[hit])
+  }
+  x
+}
+
+metminer_choose_pseudo_compound <- function(row, pseudo_area) {
+  if (is.null(pseudo_area) || !"feature_mapping" %in% names(pseudo_area)) return(NA_character_)
+  fmap <- as.data.frame(pseudo_area$feature_mapping %||% data.frame(), stringsAsFactors = FALSE)
+  if (nrow(fmap) == 0 || !all(c("compound_id", "variable_id") %in% colnames(fmap))) return(NA_character_)
+  rep_feature <- as.character(row$representative_feature %||% NA_character_)
+  members <- unique(c(rep_feature, metminer_split_feature_ids(row$member_features %||% "")))
+  hit <- fmap[fmap$variable_id %in% members, , drop = FALSE]
+  if (nrow(hit) == 0) return(NA_character_)
+  rep_hit <- hit[hit$variable_id == rep_feature, , drop = FALSE]
+  if (nrow(rep_hit) > 0) return(rep_hit$compound_id[1])
+  tab <- sort(table(hit$compound_id), decreasing = TRUE)
+  names(tab)[1]
+}
+
+metminer_clean_annotation_expr_row <- function(row, pseudo_area, object) {
+  compound_id <- metminer_choose_pseudo_compound(row, pseudo_area)
+  if (has_text(compound_id) &&
+      "expression_data" %in% names(pseudo_area) &&
+      compound_id %in% rownames(pseudo_area$expression_data)) {
+    values <- as.numeric(pseudo_area$expression_data[compound_id, , drop = TRUE])
+    names(values) <- colnames(pseudo_area$expression_data)
+    return(list(values = values, source_compound_id = compound_id, source = "pseudo_area"))
+  }
+  expr <- as.data.frame(massdataset::extract_expression_data(object), stringsAsFactors = FALSE)
+  rep_feature <- as.character(row$representative_feature %||% NA_character_)
+  if (has_text(rep_feature) && rep_feature %in% rownames(expr)) {
+    values <- as.numeric(expr[rep_feature, , drop = TRUE])
+    names(values) <- colnames(expr)
+    return(list(values = values, source_compound_id = NA_character_, source = "representative_feature"))
+  }
+  list(values = setNames(rep(NA_real_, ncol(expr)), colnames(expr)), source_compound_id = NA_character_, source = "missing")
+}
+
+metminer_build_clean_annotation_dataset <- function(annotation_filter_result,
+                                                    positive_object = NULL,
+                                                    negative_object = NULL,
+                                                    pseudo_area_pos = NULL,
+                                                    pseudo_area_neg = NULL) {
+  final <- as.data.frame(annotation_filter_result$final_table %||% data.frame(), stringsAsFactors = FALSE)
+  if (nrow(final) == 0) stop("No final non-redundant annotation table is available.", call. = FALSE)
+  if (!"metabolite_id" %in% colnames(final)) stop("final_table must contain metabolite_id.", call. = FALSE)
+  if (!"mode" %in% colnames(final)) final$mode <- NA_character_
+
+  pos <- metminer_drop_qc_samples(positive_object)
+  neg <- metminer_drop_qc_samples(negative_object)
+  template <- pos %||% neg
+  if (is.null(template)) stop("No mass_dataset object is available for clean annotation dataset.", call. = FALSE)
+
+  rows <- vector("list", nrow(final))
+  source_compound_id <- area_source <- rep(NA_character_, nrow(final))
+  for (i in seq_len(nrow(final))) {
+    mode <- tolower(as.character(final$mode[i]))
+    if (mode %in% c("positive", "pos", "+")) {
+      got <- metminer_clean_annotation_expr_row(final[i, , drop = FALSE], pseudo_area_pos, pos)
+    } else if (mode %in% c("negative", "neg", "-")) {
+      got <- metminer_clean_annotation_expr_row(final[i, , drop = FALSE], pseudo_area_neg, neg)
+    } else {
+      got <- metminer_clean_annotation_expr_row(final[i, , drop = FALSE], pseudo_area_pos, pos)
+      if (identical(got$source, "missing")) got <- metminer_clean_annotation_expr_row(final[i, , drop = FALSE], pseudo_area_neg, neg)
+    }
+    rows[[i]] <- got$values
+    source_compound_id[i] <- got$source_compound_id
+    area_source[i] <- got$source
+  }
+
+  sample_info <- as.data.frame(massdataset::extract_sample_info(template), stringsAsFactors = FALSE)
+  all_samples <- intersect(as.character(sample_info$sample_id), unique(unlist(lapply(rows, names), use.names = FALSE)))
+  expr <- do.call(rbind, lapply(rows, function(x) {
+    out <- setNames(rep(NA_real_, length(all_samples)), all_samples)
+    hit <- intersect(names(x), all_samples)
+    out[hit] <- x[hit]
+    out
+  }))
+  expr <- as.data.frame(expr, stringsAsFactors = FALSE, check.names = FALSE)
+  rownames(expr) <- as.character(final$metabolite_id)
+
+  variable_info <- metminer_clean_annotation_fill_ids(final)
+  variable_info$variable_id <- as.character(final$metabolite_id)
+  variable_info$source_compound_id <- source_compound_id
+  variable_info$area_source <- area_source
+  variable_info <- variable_info[, unique(c("variable_id", colnames(variable_info))), drop = FALSE]
+  rownames(variable_info) <- variable_info$variable_id
+
+  annotation_table <- metminer_clean_annotation_fill_ids(final)
+  annotation_table$variable_id <- as.character(final$metabolite_id)
+  if (!"ms2_files_id" %in% colnames(annotation_table)) annotation_table$ms2_files_id <- NA_character_
+  if (!"ms2_spectrum_id" %in% colnames(annotation_table)) annotation_table$ms2_spectrum_id <- NA_character_
+  annotation_table <- annotation_table[, unique(c("variable_id", colnames(annotation_table))), drop = FALSE]
+
+  object <- template
+  object@expression_data <- expr
+  object@variable_info <- variable_info
+  object@annotation_table <- annotation_table
+  object@sample_info <- sample_info[match(all_samples, sample_info$sample_id), , drop = FALSE]
+  object@variable_info_note <- data.frame(name = colnames(variable_info), meaning = colnames(variable_info), stringsAsFactors = FALSE)
+  object@other_files$clean_annotation_dataset <- list(
+    source = "annotation_filter_result$final_table + feature-network pseudo_area",
+    n_metabolites = nrow(expr),
+    n_samples = ncol(expr),
+    area_source_summary = as.list(table(area_source, useNA = "ifany"))
+  )
+  object <- massdataset::update_sample_info(object)
+  massdataset::update_variable_info(object)
+}
+
 metminer_analysis_object <- function(global_data, mode = c("merged", "positive", "negative")) {
   mode <- match.arg(mode)
   if (identical(mode, "merged")) {
@@ -218,6 +362,11 @@ metminer_update_variable_info_columns <- function(object, values) {
     variable_info[[col]][hit] <- new[idx[hit]]
   }
   object@variable_info <- variable_info
+  object@variable_info_note <- data.frame(
+    name = colnames(variable_info),
+    meaning = colnames(variable_info),
+    stringsAsFactors = FALSE
+  )
   massdataset::update_variable_info(object)
 }
 
@@ -433,7 +582,7 @@ metminer_plot_volcano <- function(dam_result, fc_cutoff = 1.5, p_cutoff = 0.05,
   y_col <- if (identical(p_column, "p_value")) "neg_log10_p" else "neg_log10_fdr"
   label <- if ("Compound.name" %in% colnames(x)) ifelse(has_text(x$Compound.name), x$Compound.name, x$variable_id) else x$variable_id
   x$hover_text <- paste0(
-    "Feature: ", x$variable_id,
+    "Metabolite/feature: ", x$variable_id,
     "<br>Compound: ", label,
     if ("mz" %in% colnames(x)) paste0("<br>m/z: ", signif(suppressWarnings(as.numeric(x$mz)), 6)) else "",
     if ("rt" %in% colnames(x)) paste0("<br>RT: ", signif(suppressWarnings(as.numeric(x$rt)), 5)) else "",

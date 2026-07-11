@@ -745,6 +745,20 @@ metminer_match_plantcyc_classyfire_cache <- function(clean_compounds,
   if (nrow(cache) == 0 || nrow(clean_compounds) == 0) {
     return(list(classification = out, hit_type = cache_hit_type, cache = cache))
   }
+  inchikey_two_block <- function(x) {
+    x <- toupper(trimws(as.character(x %||% NA_character_)))
+    out <- rep(NA_character_, length(x))
+    hit <- grepl("^[A-Z]{14}-[A-Z]{10}-[A-Z]$", x)
+    out[hit] <- sub("^([A-Z]{14}-[A-Z]{10})-[A-Z]$", "\\1", x[hit])
+    out
+  }
+  inchikey_connectivity <- function(x) {
+    x <- toupper(trimws(as.character(x %||% NA_character_)))
+    out <- rep(NA_character_, length(x))
+    hit <- grepl("^[A-Z]{14}-[A-Z]{10}-[A-Z]$", x)
+    out[hit] <- sub("^([A-Z]{14})-[A-Z]{10}-[A-Z]$", "\\1", x[hit])
+    out
+  }
 
   by_id <- match(clean_compounds$compound_id, cache$compound_id)
   hit_id <- !is.na(by_id) & has_text(clean_compounds$compound_id)
@@ -758,6 +772,24 @@ metminer_match_plantcyc_classyfire_cache <- function(clean_compounds,
   if (any(hit_key)) {
     out[hit_key, cols] <- cache[by_key[hit_key], cols, drop = FALSE]
     cache_hit_type[hit_key] <- "inchi_key"
+  }
+
+  query_two_block <- inchikey_two_block(clean_compounds$inchi_key)
+  cache_two_block <- inchikey_two_block(cache$inchi_key)
+  by_two_block <- match(query_two_block, cache_two_block)
+  hit_two_block <- is.na(cache_hit_type) & !is.na(by_two_block) & has_text(query_two_block)
+  if (any(hit_two_block)) {
+    out[hit_two_block, cols] <- cache[by_two_block[hit_two_block], cols, drop = FALSE]
+    cache_hit_type[hit_two_block] <- "inchi_key_no_protonation"
+  }
+
+  query_connectivity <- inchikey_connectivity(clean_compounds$inchi_key)
+  cache_connectivity <- inchikey_connectivity(cache$inchi_key)
+  by_connectivity <- match(query_connectivity, cache_connectivity)
+  hit_connectivity <- is.na(cache_hit_type) & !is.na(by_connectivity) & has_text(query_connectivity)
+  if (any(hit_connectivity)) {
+    out[hit_connectivity, cols] <- cache[by_connectivity[hit_connectivity], cols, drop = FALSE]
+    cache_hit_type[hit_connectivity] <- "inchi_key_connectivity"
   }
 
   out$classyfire_source[!is.na(cache_hit_type) & has_text(out$classyfire_source)] <- paste0(
@@ -933,6 +965,83 @@ metminer_plantcyc_collapse_unique <- function(x) {
   x <- x[has_text(x)]
   x <- unique(x)
   if (length(x) == 0) NA_character_ else paste(x, collapse = "{}")
+}
+
+#' Extract ClassyFire columns from matched public MS2 rows
+#'
+#' @noRd
+metminer_public_ms2_classification_rows <- function(matches, public_info, target_col) {
+  cols <- metminer_plantcyc_classyfire_cols()
+  out <- data.frame(
+    Lab.ID = character(),
+    matrix(NA_character_, nrow = 0, ncol = length(cols), dimnames = list(NULL, cols)),
+    stringsAsFactors = FALSE
+  )
+  if (nrow(matches) == 0 || nrow(public_info) == 0 || !target_col %in% colnames(matches)) {
+    return(out)
+  }
+  present_cols <- intersect(cols, colnames(public_info))
+  class_value_cols <- intersect(
+    c("Kingdom", "Super_class", "Class", "Sub_class", "direct_parent", "molecular_framework"),
+    present_cols
+  )
+  if (length(present_cols) == 0 || length(class_value_cols) == 0) {
+    return(out)
+  }
+
+  public_row <- suppressWarnings(as.integer(matches$public_row))
+  ok <- !is.na(public_row) & public_row >= 1 & public_row <= nrow(public_info) & has_text(matches[[target_col]])
+  if (!any(ok)) {
+    return(out)
+  }
+
+  out <- data.frame(
+    Lab.ID = as.character(matches[[target_col]][ok]),
+    matrix(NA_character_, nrow = sum(ok), ncol = length(cols), dimnames = list(NULL, cols)),
+    stringsAsFactors = FALSE
+  )
+  for (col in present_cols) {
+    out[[col]] <- as.character(public_info[[col]][public_row[ok]])
+  }
+  has_class <- Reduce(`|`, lapply(class_value_cols, function(col) has_text(out[[col]])))
+  if ("classyfire_status" %in% colnames(out)) {
+    out$classyfire_status[has_class & !has_text(out$classyfire_status)] <- "public_database"
+  }
+  if ("classyfire_source" %in% colnames(out)) {
+    source <- as.character(matches$source_database[ok])
+    out$classyfire_source[has_class & !has_text(out$classyfire_source)] <- paste0("public MS2: ", source[has_class & !has_text(out$classyfire_source)])
+  }
+  out[has_class, , drop = FALSE]
+}
+
+#' Fill missing ClassyFire columns in spectra.info from public MS2 matches
+#'
+#' @noRd
+metminer_merge_public_ms2_classification <- function(spectra_info, classification_rows) {
+  spectra_info <- as.data.frame(spectra_info, stringsAsFactors = FALSE)
+  cols <- metminer_plantcyc_classyfire_cols()
+  for (col in cols) {
+    if (!col %in% colnames(spectra_info)) spectra_info[[col]] <- NA_character_
+  }
+  if (nrow(spectra_info) == 0 || nrow(classification_rows) == 0) {
+    return(spectra_info)
+  }
+
+  class_summary <- lapply(split(classification_rows, classification_rows$Lab.ID), function(x) {
+    values <- lapply(cols, function(col) metminer_plantcyc_collapse_unique(x[[col]]))
+    names(values) <- cols
+    as.data.frame(c(list(Lab.ID = x$Lab.ID[1]), values), stringsAsFactors = FALSE)
+  })
+  class_summary <- do.call(rbind, class_summary)
+  hit <- match(as.character(spectra_info$Lab.ID), class_summary$Lab.ID)
+  for (col in cols) {
+    value <- as.character(spectra_info[[col]])
+    fill <- !has_text(value) & !is.na(hit)
+    value[fill] <- as.character(class_summary[[col]][hit[fill]])
+    value[!has_text(value)] <- NA_character_
+    spectra_info[[col]] <- value
+  }
+  spectra_info
 }
 
 metminer_plantcyc_formula_counts <- function(formula) {
@@ -1137,6 +1246,7 @@ metminer_build_plantcyc_ms2_database <- function(clean_compounds,
 
   plant_info <- metminer_plantcyc_spectra_info(clean_compounds)
   all_matches <- list()
+  public_classification <- list()
   spectra_data <- list(Spectra.positive = list(), Spectra.negative = list())
 
   for (db_id in builtin_databases) {
@@ -1156,6 +1266,11 @@ metminer_build_plantcyc_ms2_database <- function(clean_compounds,
     )
     if (nrow(matches) == 0) next
     all_matches[[source_database]] <- matches
+    public_classification[[source_database]] <- metminer_public_ms2_classification_rows(
+      matches = matches,
+      public_info = public_info,
+      target_col = "plantcyc_id"
+    )
 
     for (i in seq_len(nrow(matches))) {
       public_row <- matches$public_row[i]
@@ -1188,6 +1303,10 @@ metminer_build_plantcyc_ms2_database <- function(clean_compounds,
 
   ms2_ids <- unique(c(names(spectra_data$Spectra.positive), names(spectra_data$Spectra.negative)))
   spectra_info <- plant_info[plant_info$Lab.ID %in% ms2_ids, , drop = FALSE]
+  if (length(public_classification) > 0) {
+    class_rows <- do.call(rbind, public_classification)
+    spectra_info <- metminer_merge_public_ms2_classification(spectra_info, class_rows)
+  }
 
   if (nrow(spectra_info) > 0 && nrow(match_log) > 0) {
     provenance <- lapply(split(match_log, match_log$plantcyc_id), function(x) {

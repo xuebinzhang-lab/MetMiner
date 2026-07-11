@@ -37,7 +37,9 @@ metminer_expand_builtin_annotation_ids <- function(database_ids) {
     out <- c(out, database_id)
     if (database_id %in% plantcyc_choices && grepl("_ms1$", database_id)) {
       ms2_id <- sub("_ms1$", "_ms2", database_id)
-      if (file.exists(file.path("data", paste0(ms2_id, ".rda")))) {
+      ms2_file <- file.path("data", paste0(ms2_id, ".rda"))
+      pkg_ms2_file <- system.file("data", paste0(ms2_id, ".rda"), package = "MetMiner")
+      if (file.exists(ms2_file) || has_text(pkg_ms2_file)) {
         out <- c(out, ms2_id)
       }
     }
@@ -390,6 +392,8 @@ metminer_empty_annotation_table <- function() {
   cols <- c(
     "variable_id", "ms2_spectrum_id", "Compound.name", "CAS.ID", "HMDB.ID",
     "KEGG.ID", "PlantCyc.ID", "BIOCYC.ID", "Lab.ID", "Adduct",
+    "Kingdom", "Super_class", "Class", "Sub_class", "direct_parent",
+    "molecular_framework", "classyfire_status", "classyfire_source",
     "mz.error", "mz.match.score", "RT.error", "RT.match.score", "CE", "SS",
     "Total.score", "Database", "Database.ID", "Database.Label", "Database.Source.Type",
     "Level", "Annotation.Layer", "Annotation.Layer.detail", "annotation_layer",
@@ -399,6 +403,8 @@ metminer_empty_annotation_table <- function() {
   char_cols <- c(
     "variable_id", "ms2_spectrum_id", "Compound.name", "CAS.ID", "HMDB.ID",
     "KEGG.ID", "PlantCyc.ID", "BIOCYC.ID", "Lab.ID", "Adduct",
+    "Kingdom", "Super_class", "Class", "Sub_class", "direct_parent",
+    "molecular_framework", "classyfire_status", "classyfire_source",
     "CE", "Database", "Database.ID", "Database.Label", "Database.Source.Type",
     "Annotation.Layer", "Annotation.Layer.detail", "annotation_layer",
     "evidence_scope", "core_adduct_match", "strict_genome_adduct_pass",
@@ -422,7 +428,9 @@ metminer_coerce_annotation_table_types <- function(tab) {
   tab <- as.data.frame(tab, stringsAsFactors = FALSE)
   char_cols <- c(
     "variable_id", "ms2_spectrum_id", "Compound.name", "CAS.ID", "HMDB.ID",
-    "KEGG.ID", "PlantCyc.ID", "BIOCYC.ID", "Lab.ID", "Adduct", "CE",
+    "KEGG.ID", "PlantCyc.ID", "BIOCYC.ID", "Lab.ID", "Adduct",
+    "Kingdom", "Super_class", "Class", "Sub_class", "direct_parent",
+    "molecular_framework", "classyfire_status", "classyfire_source", "CE",
     "Database", "Database.ID", "Database.Label", "Database.Source.Type",
     "Annotation.Layer", "Annotation.Layer.detail", "annotation_layer",
     "evidence_scope", "core_adduct_match", "strict_genome_adduct_pass",
@@ -438,6 +446,46 @@ metminer_coerce_annotation_table_types <- function(tab) {
   }
   for (col in intersect(integer_cols, colnames(tab))) {
     tab[[col]] <- suppressWarnings(as.integer(tab[[col]]))
+  }
+  tab
+}
+
+metminer_annotation_classification_cols <- function() {
+  c(
+    "Kingdom", "Super_class", "Class", "Sub_class", "direct_parent",
+    "molecular_framework", "classyfire_status", "classyfire_source"
+  )
+}
+
+metminer_add_database_classification_columns <- function(tab, database) {
+  tab <- as.data.frame(tab %||% data.frame(), stringsAsFactors = FALSE)
+  cols <- metminer_annotation_classification_cols()
+  for (col in cols) {
+    if (!col %in% colnames(tab)) tab[[col]] <- NA_character_
+  }
+  if (nrow(tab) == 0 || is.null(database)) {
+    return(tab)
+  }
+
+  info <- tryCatch(as.data.frame(database@spectra.info, stringsAsFactors = FALSE), error = function(e) data.frame())
+  if (nrow(info) == 0 || !"Lab.ID" %in% colnames(info)) {
+    return(tab)
+  }
+  present_cols <- intersect(cols, colnames(info))
+  if (length(present_cols) == 0) {
+    return(tab)
+  }
+
+  info$Lab.ID <- as.character(info$Lab.ID)
+  info <- info[has_text(info$Lab.ID), unique(c("Lab.ID", present_cols)), drop = FALSE]
+  info <- info[!duplicated(info$Lab.ID), , drop = FALSE]
+  hit <- match(as.character(tab$Lab.ID %||% NA_character_), info$Lab.ID)
+  for (col in present_cols) {
+    value <- as.character(tab[[col]] %||% NA_character_)
+    missing <- !has_text(value) & !is.na(hit)
+    value[missing] <- as.character(info[[col]][hit[missing]])
+    value[!has_text(value)] <- NA_character_
+    tab[[col]] <- value
   }
   tab
 }
@@ -504,6 +552,7 @@ metminer_normalize_annotation_result <- function(tab, db, database_rank = NA_int
   if (!"Database" %in% colnames(tab) || all(!has_text(tab$Database))) {
     tab$Database <- database_label
   }
+  tab <- metminer_add_database_classification_columns(tab, db$database)
   tab <- metminer_add_annotation_layer_columns(tab, polarity)
   tab <- metminer_fill_same_compound_annotation_ids(tab)
   tab <- metminer_add_annotation_layer_columns(tab, polarity)
@@ -1794,6 +1843,14 @@ interpret_annotation_subnetworks <- function(candidates, feature_selection, edge
         selected_compound = metminer_scalar_col(sel, "Compound.name", NA_character_),
         selected_adduct = metminer_scalar_col(sel, "Adduct", NA_character_),
         compound_key = metminer_scalar_col(sel, "compound_key", NA_character_),
+        Kingdom = metminer_scalar_col(sel, "Kingdom", NA_character_),
+        Super_class = metminer_scalar_col(sel, "Super_class", NA_character_),
+        Class = metminer_scalar_col(sel, "Class", NA_character_),
+        Sub_class = metminer_scalar_col(sel, "Sub_class", NA_character_),
+        direct_parent = metminer_scalar_col(sel, "direct_parent", NA_character_),
+        molecular_framework = metminer_scalar_col(sel, "molecular_framework", NA_character_),
+        classyfire_status = metminer_scalar_col(sel, "classyfire_status", NA_character_),
+        classyfire_source = metminer_scalar_col(sel, "classyfire_source", NA_character_),
         metid_level = suppressWarnings(as.integer(metminer_scalar_col(sel, "Level", NA_integer_))),
         metid_rank = suppressWarnings(as.integer(metminer_scalar_col(sel, "candidate_rank", NA_integer_))),
         metid_total_score = round(suppressWarnings(as.numeric(metminer_scalar_col(sel, "Total.score", NA_real_))), 4),

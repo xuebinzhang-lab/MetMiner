@@ -1,0 +1,526 @@
+---
+title: "Differential Analysis and Enrichment Report"
+date: last-modified
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    number-sections: true
+    self-contained: true
+    code-tools: false
+    smooth-scroll: true
+params:
+  work_dir: null
+  metadata: null
+  max_tabs: 6
+editor:
+  markdown:
+    wrap: sentence
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  fig.width = 10,
+  fig.height = 6
+)
+
+library(dplyr)
+library(plotly)
+library(DT)
+library(ggplot2)
+
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || all(is.na(x))) y else x
+has_text <- function(x) !is.null(x) && length(x) > 0 && !is.na(x[1]) && nzchar(trimws(as.character(x[1])))
+has_text_vec <- function(x) {
+  if (is.null(x) || length(x) == 0) return(logical())
+  !is.na(x) & nzchar(trimws(as.character(x)))
+}
+
+work_dir <- params$work_dir %||% "."
+tables_dir <- file.path(work_dir, "tables")
+status_dir <- file.path(work_dir, "status")
+config_dir <- file.path(work_dir, "config")
+max_tabs <- params$max_tabs %||% 6
+
+read_tsv <- function(path) {
+  if (!file.exists(path)) return(data.frame())
+  if (file.info(path)$size <= 3) return(data.frame())
+  tryCatch(
+    utils::read.delim(path, stringsAsFactors = FALSE, check.names = FALSE, quote = "\"", comment.char = ""),
+    error = function(e) data.frame()
+  )
+}
+
+read_json <- function(path) {
+  if (!file.exists(path) || !requireNamespace("jsonlite", quietly = TRUE)) return(NULL)
+  jsonlite::fromJSON(path, simplifyVector = FALSE)
+}
+
+fmt_int <- function(x) {
+  ifelse(is.na(x), NA_character_, format(as.integer(round(x)), big.mark = ","))
+}
+
+fmt_num <- function(x, digits = 3) {
+  ifelse(is.na(x), NA_character_, signif(as.numeric(x), digits))
+}
+
+pick_col <- function(x, candidates) {
+  hit <- intersect(candidates, colnames(x))
+  if (length(hit) == 0) NA_character_ else hit[1]
+}
+
+safe_log10 <- function(x) {
+  -log10(pmax(suppressWarnings(as.numeric(x)), .Machine$double.xmin))
+}
+
+datatable_report <- function(x, page_length = 10) {
+  if (nrow(x) == 0) return(htmltools::p("No rows available."))
+  DT::datatable(
+    x,
+    rownames = FALSE,
+    filter = "top",
+    extensions = c("Buttons"),
+    options = list(
+      scrollX = TRUE,
+      pageLength = page_length,
+      dom = "Bfrtip",
+      buttons = c("copy", "csv")
+    )
+  )
+}
+
+highlight <- function(x) {
+  paste0("<span style=\"color:#0d6efd;font-weight:700;\">", x, "</span>")
+}
+
+make_unique_label <- function(name, id) {
+  out <- ifelse(has_text_vec(name), paste0(name, " (", id, ")"), id)
+  out
+}
+
+volcano_plot <- function(dam_result, fc_cutoff = 1.2, p_cutoff = 0.05, p_column = "p_value") {
+  x <- as.data.frame(dam_result %||% data.frame(), stringsAsFactors = FALSE)
+  if (nrow(x) == 0) return(plotly::plot_ly())
+  x$log2_fc <- suppressWarnings(as.numeric(x$log2_fc %||% log2(x$fc)))
+  x$neg_log10_p <- safe_log10(x$p_value)
+  x$neg_log10_fdr <- safe_log10(x$p_value_adjust)
+  y_col <- if (identical(p_column, "p_value_adjust")) "neg_log10_fdr" else "neg_log10_p"
+  label <- if ("Compound.name" %in% colnames(x)) as.character(x$Compound.name) else as.character(x$variable_id)
+  label[!has_text_vec(label)] <- as.character(x$variable_id[!has_text_vec(label)])
+  x$hover_text <- paste0(
+    "Metabolite/feature: ", x$variable_id,
+    "<br>Compound: ", label,
+    if ("mz" %in% colnames(x)) paste0("<br>m/z: ", signif(suppressWarnings(as.numeric(x$mz)), 6)) else "",
+    if ("rt" %in% colnames(x)) paste0("<br>RT: ", signif(suppressWarnings(as.numeric(x$rt)), 5)) else "",
+    if ("KEGG.ID" %in% colnames(x)) paste0("<br>KEGG: ", x$KEGG.ID) else "",
+    if ("PlantCyc.ID" %in% colnames(x)) paste0("<br>PlantCyc: ", x$PlantCyc.ID) else "",
+    if ("Lab.ID" %in% colnames(x)) paste0("<br>Lab ID: ", x$Lab.ID) else "",
+    if ("Adduct" %in% colnames(x)) paste0("<br>Adduct: ", x$Adduct) else "",
+    "<br>log2FC: ", round(x$log2_fc, 3),
+    "<br>p: ", signif(suppressWarnings(as.numeric(x$p_value)), 3),
+    "<br>FDR: ", signif(suppressWarnings(as.numeric(x$p_value_adjust)), 3),
+    "<br>Change: ", x$change
+  )
+
+  p <- ggplot2::ggplot(x, ggplot2::aes(x = log2_fc, y = .data[[y_col]], color = change, key = variable_id, text = hover_text)) +
+    ggplot2::geom_point(alpha = 0.75, size = 1.8) +
+    ggplot2::geom_vline(xintercept = c(-log2(fc_cutoff), log2(fc_cutoff)), linetype = "dashed", color = "grey55") +
+    ggplot2::geom_hline(yintercept = -log10(p_cutoff), linetype = "dashed", color = "grey55") +
+    ggplot2::scale_color_manual(values = c("Up" = "#c0392b", "Down" = "#2f6fbb", "Not significant" = "#90979f")) +
+    ggplot2::labs(x = "log2 fold change", y = if (identical(p_column, "p_value_adjust")) "-log10(FDR)" else "-log10(p)", color = NULL) +
+    ggplot2::theme_minimal(base_size = 12)
+
+  plotly::ggplotly(p, tooltip = "text", source = "dam_volcano") |>
+    plotly::layout(legend = list(orientation = "h", x = 0, y = -0.18))
+}
+
+plot_img_tag <- function(p, width = 10, height = 6) {
+  img <- tempfile(fileext = ".png")
+  ggplot2::ggsave(img, plot = p, width = width, height = height, dpi = 150, bg = "white")
+  htmltools::tags$img(
+    src = knitr::image_uri(img),
+    style = "width:100%;max-width:980px;display:block;margin:0 auto 1rem auto;"
+  )
+}
+
+enrichment_scatter <- function(x, comparison_id, database_label = "KEGG") {
+  if (nrow(x) == 0) return(htmltools::p("No enrichment rows available."))
+  x$p_value <- suppressWarnings(as.numeric(x$p_value))
+  x$p_value_adjust <- suppressWarnings(as.numeric(x$p_value_adjust))
+  x$mapped_number <- suppressWarnings(as.numeric(x$mapped_number))
+  x$mapped_percentage <- suppressWarnings(as.numeric(x$mapped_percentage))
+  x$all_number <- suppressWarnings(as.numeric(x$all_number %||% x$background_number %||% x$mapped_number))
+  x <- x |>
+    arrange(.data$p_value, .data$p_value_adjust, desc(.data$mapped_number))
+  if (requireNamespace("metpath", quietly = TRUE)) {
+    metpath_plot <- tryCatch({
+      result <- x
+      if (!"all_number" %in% colnames(result)) result$all_number <- result$mapped_number
+      result$all_number <- suppressWarnings(as.numeric(result$all_number))
+      result$all_number[is.na(result$all_number) | result$all_number <= 0] <- result$mapped_number[is.na(result$all_number) | result$all_number <= 0]
+      if (!"pathway_name" %in% colnames(result)) result$pathway_name <- result$pathway_id
+      if (!"p_value_adjust" %in% colnames(result)) result$p_value_adjust <- result$p_value
+      parameter <- tryCatch(
+        methods::new(
+          Class = "tidymass_parameter",
+          pacakge_name = "MetMiner",
+          function_name = "metminer_differential_enrichment_report()",
+          parameter = list(
+            comparison_id = comparison_id,
+            database = database_label,
+            y_axis = "p_value",
+            cutoff = 0.05
+          ),
+          time = Sys.time()
+        ),
+        error = function(e) NULL
+      )
+      if (is.null(parameter)) stop("Could not create tidymass parameter.", call. = FALSE)
+      enrich_obj <- methods::new(
+        Class = "enrich_result",
+        pathway_database = database_label,
+        pathway_version = "",
+        result = result,
+        parameter = parameter
+      )
+      p <- metpath::enrich_scatter_plot(
+        enrich_obj,
+        x_axis = "mapped_percentage",
+        y_axis = "p_value",
+        point_size = "all_number",
+        x_axis_cutoff = 0,
+        y_axis_cutoff = 0.05,
+        label = TRUE,
+        label_size = 3.5
+      )
+      if (is.null(p)) stop("No pathways are enriched.", call. = FALSE)
+      p <- p +
+        ggplot2::labs(title = NULL) +
+        ggplot2::theme(
+          plot.title = ggplot2::element_blank(),
+          legend.position = "right"
+        )
+      plot_img_tag(p)
+    }, error = function(e) NULL)
+    if (!is.null(metpath_plot)) return(metpath_plot)
+  }
+  x$pathway_label <- make_unique_label(x$pathway_name, x$pathway_id)
+  x$neg_log10_p <- safe_log10(x$p_value)
+  x$is_significant <- x$p_value < 0.05 & x$mapped_percentage > 0
+  p <- ggplot2::ggplot(
+    x,
+    ggplot2::aes(
+      x = mapped_percentage,
+      y = neg_log10_p,
+      size = all_number,
+      fill = is_significant
+    )
+  ) +
+    ggplot2::geom_hline(yintercept = -log10(0.05), color = "grey70", linetype = 2) +
+    ggplot2::geom_vline(xintercept = 0, color = "grey70", linetype = 2) +
+    ggplot2::geom_point(shape = 21, color = "black", alpha = 0.9) +
+    ggplot2::scale_fill_manual(values = c("TRUE" = "#EE0000FF", "FALSE" = "grey70"), guide = "none") +
+    ggplot2::labs(x = "Mapped percentage (%)", y = "-log(P-values, 10)", size = "Pathway size") +
+    ggplot2::theme_bw(base_size = 12) +
+    ggplot2::theme(panel.grid = ggplot2::element_blank())
+  if (requireNamespace("ggrepel", quietly = TRUE)) {
+    p <- p + ggrepel::geom_text_repel(
+      data = x[x$is_significant, , drop = FALSE],
+      ggplot2::aes(label = pathway_label),
+      size = 3.5,
+      show.legend = FALSE
+    )
+  }
+  plot_img_tag(p)
+}
+
+filter_enrichment_p <- function(x, p_cutoff = 0.05) {
+  x <- as.data.frame(x %||% data.frame(), stringsAsFactors = FALSE)
+  if (nrow(x) == 0 || !"p_value" %in% colnames(x)) return(x)
+  x$p_value <- suppressWarnings(as.numeric(x$p_value))
+  x[x$p_value < p_cutoff, , drop = FALSE]
+}
+
+drop_description_cols <- function(x) {
+  x <- as.data.frame(x %||% data.frame(), stringsAsFactors = FALSE)
+  x[, setdiff(colnames(x), c("describtion", "description", "Description")), drop = FALSE]
+}
+
+clean_enrichment_table <- function(x) {
+  x <- drop_description_cols(x)
+  x[, setdiff(colnames(x), "query_id"), drop = FALSE]
+}
+
+metric_value <- function(x, metric, default = NA_integer_) {
+  if (nrow(x) == 0 || !all(c("metric", "value") %in% colnames(x))) return(default)
+  hit <- match(metric, as.character(x$metric))
+  if (is.na(hit)) default else suppressWarnings(as.integer(x$value[hit]))
+}
+
+diff_table <- read_tsv(file.path(tables_dir, "10.differential_result.tsv"))
+diff_summary <- read_tsv(file.path(tables_dir, "10.differential_summary.tsv"))
+enrich_table <- read_tsv(file.path(tables_dir, "09.enrichment_result.tsv"))
+enrich_p <- read_tsv(file.path(tables_dir, "09.enrichment_p_0_05.tsv"))
+enrich_fdr <- read_tsv(file.path(tables_dir, "09.enrichment_fdr_0_05.tsv"))
+query_background <- read_tsv(file.path(tables_dir, "09.enrichment_query_background.tsv"))
+plantcyc_enrich_table <- read_tsv(file.path(tables_dir, "09.plantcyc_enrichment_result.tsv"))
+plantcyc_enrich_p <- read_tsv(file.path(tables_dir, "09.plantcyc_enrichment_p_0_05.tsv"))
+plantcyc_enrich_fdr <- read_tsv(file.path(tables_dir, "09.plantcyc_enrichment_fdr_0_05.tsv"))
+plantcyc_query_background <- read_tsv(file.path(tables_dir, "09.plantcyc_enrichment_query_background.tsv"))
+clean_matrix <- read_tsv(file.path(tables_dir, "08.clean_annotation_matrix.tsv"))
+sample_info <- read_tsv(file.path(config_dir, "sample_info.tsv"))
+clean_annotation_summary <- read_tsv(file.path(tables_dir, "08.clean_annotation_dataset_summary.tsv"))
+annotation_filtering_summary <- read_tsv(file.path(tables_dir, "08.annotation_filtering_summary.tsv"))
+redundancy_audit <- read_tsv(file.path(tables_dir, "08.redundancy_audit.tsv"))
+compare_group <- read_tsv(file.path(config_dir, "compare_group.tsv"))
+diff_status <- read_json(file.path(status_dir, "differential_analysis.json"))
+enrich_status <- read_json(file.path(status_dir, "enrichment.json"))
+
+preferred_comparisons <- c(
+  "OEL_7D_vs_EV_7D",
+  "OEH_7D_vs_EV_7D",
+  "OEH_7D_vs_OEL_7D",
+  "OEL_12D_vs_EV_12D",
+  "OEH_12D_vs_EV_12D",
+  "OEH_12D_vs_OEL_12D"
+)
+
+available_comparisons <- if (nrow(compare_group) > 0 && "comparison_id" %in% colnames(compare_group)) {
+  unique(as.character(compare_group$comparison_id))
+} else if (nrow(diff_summary) > 0 && "comparison_id" %in% colnames(diff_summary)) {
+  unique(as.character(diff_summary$comparison_id))
+} else {
+  unique(as.character(diff_table$comparison_id %||% enrich_table$comparison_id %||% character()))
+}
+available_comparisons <- available_comparisons[has_text_vec(available_comparisons)]
+comparison_order <- c(
+  preferred_comparisons[preferred_comparisons %in% available_comparisons],
+  setdiff(available_comparisons, preferred_comparisons)
+)
+display_comparisons <- head(comparison_order, max_tabs)
+
+dam_params <- diff_status$parameters %||% list()
+fc_cutoff <- as.numeric(dam_params$default_fc_cutoff %||% 1.2)
+p_cutoff <- as.numeric(dam_params$default_p_cutoff %||% 0.05)
+p_col <- "p_value"
+
+clean_records <- metric_value(clean_annotation_summary, "clean_metabolites", metric_value(annotation_filtering_summary, "final_records", nrow(clean_matrix)))
+audit_records <- metric_value(annotation_filtering_summary, "audit_records", nrow(redundancy_audit))
+dropped_records <- metric_value(annotation_filtering_summary, "dropped_records", if (nrow(redundancy_audit) > 0 && "keep" %in% colnames(redundancy_audit)) sum(!redundancy_audit$keep, na.rm = TRUE) else NA_integer_)
+cross_polarity_dropped <- if (nrow(redundancy_audit) > 0 && all(c("keep", "cross_polarity_group") %in% colnames(redundancy_audit))) {
+  sum(!redundancy_audit$keep & has_text_vec(redundancy_audit$cross_polarity_group), na.rm = TRUE)
+} else {
+  NA_integer_
+}
+recurrent_review_records <- if (nrow(redundancy_audit) > 0 && "recurrent_status" %in% colnames(redundancy_audit)) {
+  sum(has_text_vec(redundancy_audit$recurrent_status) & redundancy_audit$recurrent_status != "none", na.rm = TRUE)
+} else {
+  NA_integer_
+}
+```
+
+## Summary
+
+This report summarizes differential abundance metabolite analysis and KEGG enrichment for the clean, non-redundant annotation result.
+
+The differential analysis is run on the final clean metabolite/sub-network table rather than on every raw feature.
+This keeps the statistical table aligned with the annotation review result: one row represents a final metabolite-like unit, with feature-network pseudo area used where available.
+
+The DAM cutoff used in this report is **`r htmltools::HTML(highlight(paste0("FC >= ", fc_cutoff)))`** and **`r htmltools::HTML(highlight(paste0("P < ", p_cutoff)))`**.
+
+For readability and browser performance, the detailed DAM result section renders interactive tabs for the first `r length(display_comparisons)` comparison groups, with a maximum of `r max_tabs`.
+The preferred display order is `OEL_7D_vs_EV_7D`, `OEH_7D_vs_EV_7D`, `OEH_7D_vs_OEL_7D`, `OEL_12D_vs_EV_12D`, `OEH_12D_vs_EV_12D`, and `OEH_12D_vs_OEL_12D`.
+If fewer than six groups are available, all available groups are shown.
+All comparison groups and all rows are still available in the TSV outputs under the `tables/` directory.
+
+::: {.callout-important}
+## Clean Annotation Result
+
+The final non-redundant annotation table contains **`r fmt_int(clean_records)`** records.
+The redundancy audit tracked **`r fmt_int(audit_records)`** candidate records, including **`r fmt_int(dropped_records)`** dropped records and **`r fmt_int(cross_polarity_dropped)`** cross-polarity redundant records.
+Feature-network recurrent context flagged **`r fmt_int(recurrent_review_records)`** records for review.
+:::
+
+```{r}
+#| label: overview-values
+
+summary_display <- diff_summary
+if (nrow(summary_display) > 0 && "comparison_id" %in% colnames(summary_display)) {
+  summary_display$.display_order <- match(as.character(summary_display$comparison_id), comparison_order)
+  summary_display <- summary_display[order(summary_display$.display_order, na.last = TRUE), , drop = FALSE]
+}
+summary_keep <- intersect(
+  c("comparison_id", "description", "case_group", "control_group", "significant", "up", "down"),
+  colnames(summary_display)
+)
+summary_display <- summary_display[, summary_keep, drop = FALSE]
+datatable_report(summary_display, page_length = 18)
+```
+
+::: {.callout-warning}
+## KEGG Enrichment Background
+
+For species without a dedicated KEGG organism pathway database, this workflow uses all KEGG IDs detected in the clean annotation result as the enrichment background.
+This is useful for exploratory screening, but it is less conservative than a species-specific detectable pathway universe and may increase false-positive pathway signals.
+The report therefore keeps the enrichment display focused on the exploratory `P < 0.05` result tables.
+:::
+
+## DAM Results
+
+```{r}
+#| label: comparison-tabs
+#| results: markup
+
+comparison_panel <- function(comparison_id, active = FALSE) {
+  dam_i <- diff_table[as.character(diff_table$comparison_id) == comparison_id, , drop = FALSE]
+  enrich_i <- enrich_table[as.character(enrich_table$comparison_id) == comparison_id, , drop = FALSE]
+  plantcyc_i <- plantcyc_enrich_table[as.character(plantcyc_enrich_table$comparison_id) == comparison_id, , drop = FALSE]
+  summary_i <- diff_summary[as.character(diff_summary$comparison_id) == comparison_id, , drop = FALSE]
+  query_i <- query_background[as.character(query_background$comparison_id) == comparison_id, , drop = FALSE]
+  plantcyc_query_i <- plantcyc_query_background[as.character(plantcyc_query_background$comparison_id) == comparison_id, , drop = FALSE]
+
+  tab_id <- paste0("dam-tab-", gsub("[^A-Za-z0-9_-]+", "-", comparison_id))
+  summary_text <- if (nrow(summary_i) > 0) {
+    paste0(
+      "DAMs: <strong>", fmt_int(summary_i$significant[1]), "</strong> ",
+      "(Up: <strong>", fmt_int(summary_i$up[1]), "</strong>; Down: <strong>", fmt_int(summary_i$down[1]), "</strong>). ",
+      "Features/metabolites tested: <strong>", fmt_int(summary_i$features_tested[1]), "</strong>."
+    )
+  } else {
+    "DAM summary is not available."
+  }
+
+  dam_table_i <- dam_i[dam_i$change %in% c("Up", "Down"), , drop = FALSE]
+  dam_keep <- intersect(
+    c("comparison_id", "variable_id", "representative_feature", "Compound.name", "KEGG.ID", "PlantCyc.ID",
+      "fc", "log2_fc", "p_value", "p_value_adjust", "change", "mz", "rt", "Super_class", "Class", "Sub_class"),
+    colnames(dam_table_i)
+  )
+
+  enrich_i$database <- "KEGG"
+  plantcyc_i$database <- "PlantCyc"
+  enrich_i_p <- filter_enrichment_p(enrich_i, p_cutoff)
+  plantcyc_i_p <- filter_enrichment_p(plantcyc_i, p_cutoff)
+  enrich_all_i <- dplyr::bind_rows(enrich_i_p, plantcyc_i_p)
+  enrich_all_i <- clean_enrichment_table(enrich_all_i)
+  enrich_keep <- intersect(
+    c("database", "comparison_id", "pathway_id", "pathway_name", "p_value", "p_value_adjust", "background_number",
+      "query_number", "mapped_number", "mapped_percentage", "mapped_id"),
+    colnames(enrich_all_i)
+  )
+
+  htmltools::tags$div(
+    id = tab_id,
+    class = paste("tab-pane fade", if (active) "show active" else ""),
+    role = "tabpanel",
+    `aria-labelledby` = paste0(tab_id, "-tab"),
+    htmltools::tags$div(
+      class = "pt-3",
+      htmltools::tags$p(htmltools::HTML(summary_text)),
+      htmltools::tags$h4("Interactive Volcano Plot"),
+      volcano_plot(dam_i, fc_cutoff = fc_cutoff, p_cutoff = p_cutoff, p_column = p_col),
+      htmltools::tags$h4("KEGG Enrichment Scatter Plot"),
+      enrichment_scatter(enrich_i, comparison_id, database_label = "KEGG"),
+      htmltools::tags$h4("PlantCyc Enrichment Result"),
+      enrichment_scatter(plantcyc_i, comparison_id, database_label = "PlantCyc"),
+      htmltools::tags$h4("Differential Analysis Table"),
+      datatable_report(dam_table_i[, dam_keep, drop = FALSE], page_length = 10),
+      htmltools::tags$h4("Enrichment Table"),
+      datatable_report(enrich_all_i[, enrich_keep, drop = FALSE], page_length = 10)
+    )
+  )
+}
+
+if (length(display_comparisons) == 0) {
+  htmltools::p("No comparison result is available.")
+} else {
+  nav_items <- lapply(seq_along(display_comparisons), function(i) {
+    comparison_id <- display_comparisons[[i]]
+    tab_id <- paste0("dam-tab-", gsub("[^A-Za-z0-9_-]+", "-", comparison_id))
+    htmltools::tags$li(
+      class = "nav-item",
+      role = "presentation",
+      htmltools::tags$button(
+        class = paste("nav-link", if (i == 1) "active" else ""),
+        id = paste0(tab_id, "-tab"),
+        `data-bs-toggle` = "tab",
+        `data-bs-target` = paste0("#", tab_id),
+        type = "button",
+        role = "tab",
+        `aria-controls` = tab_id,
+        `aria-selected` = if (i == 1) "true" else "false",
+        comparison_id
+      )
+    )
+  })
+
+  panels <- lapply(seq_along(display_comparisons), function(i) {
+    comparison_panel(display_comparisons[[i]], active = i == 1)
+  })
+
+  htmltools::tagList(
+    htmltools::tags$div(
+      class = "panel-tabset metminer-dam-tabset",
+      htmltools::tags$ul(class = "nav nav-tabs", role = "tablist", nav_items),
+      htmltools::tags$div(class = "tab-content", panels)
+    )
+  )
+}
+```
+
+## Threshold Tables
+
+### KEGG Enrichment P < 0.05
+
+```{r}
+#| label: enrichment-p-table
+
+datatable_report(clean_enrichment_table(enrich_p), page_length = 10)
+```
+
+### PlantCyc Enrichment P < 0.05
+
+```{r}
+#| label: plantcyc-enrichment-p-table
+
+datatable_report(clean_enrichment_table(plantcyc_enrich_p), page_length = 10)
+```
+
+## Output Files
+
+```{r}
+#| label: output-files
+
+files <- data.frame(
+  file = c(
+    "tables/10.differential_result.tsv",
+    "tables/10.differential_summary.tsv",
+    "tables/09.enrichment_result.tsv",
+    "tables/09.enrichment_p_0_05.tsv",
+    "tables/09.enrichment_query_background.tsv",
+    "tables/09.plantcyc_enrichment_result.tsv",
+    "tables/09.plantcyc_enrichment_p_0_05.tsv",
+    "tables/09.plantcyc_enrichment_query_background.tsv"
+  ),
+  description = c(
+    "Full differential abundance result table for all comparison groups.",
+    "One-row summary per comparison group.",
+    "Full KEGG enrichment table.",
+    "KEGG enrichment table filtered at P < 0.05.",
+    "Query/background diagnostic table for KEGG enrichment.",
+    "Full PlantCyc enrichment table.",
+    "PlantCyc enrichment table filtered at P < 0.05.",
+    "Query/background diagnostic table for PlantCyc enrichment."
+  )
+)
+datatable_report(files, page_length = 10)
+```

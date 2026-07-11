@@ -69,7 +69,31 @@ mod_kegg_database_ui <- function(id) {
             ),
 
             tags$hr(),
-            tags$h6(class = "fw-bold text-primary", "5. Output"),
+            tags$h6(class = "fw-bold text-primary", "5. PubChem enrichment"),
+            checkboxInput(ns("use_pubchem"), "Add PubChem PUG-REST InChIKey/SMILES/CID/CAS", value = FALSE),
+            conditionalPanel(
+              condition = sprintf("input['%s']", ns("use_pubchem")),
+              numericInput(ns("pubchem_sleep_sec"), "Sleep between PubChem requests (sec)", value = 1.2, min = 1, step = 0.1),
+              numericInput(ns("pubchem_batch_size"), "PubChem batch size", value = 25, min = 1, max = 100, step = 1),
+              numericInput(ns("pubchem_max_retries"), "PubChem max retries", value = 3, min = 1, max = 5, step = 1),
+              tags$small(
+                class = "text-muted d-block mb-3",
+                "Default is off. When enabled, MetMiner uses cached, throttled batch PUG-REST requests and records PubChem throttling headers."
+              )
+            ),
+            checkboxInput(ns("use_classyfire"), "Add ClassyFire classification via InChIKey", value = FALSE),
+            conditionalPanel(
+              condition = sprintf("input['%s']", ns("use_classyfire")),
+              numericInput(ns("classyfire_sleep_sec"), "Sleep between ClassyFire requests (sec)", value = 2, min = 1, step = 0.5),
+              numericInput(ns("classyfire_max_retries"), "ClassyFire max retries", value = 3, min = 1, max = 5, step = 1),
+              tags$small(
+                class = "text-muted d-block mb-3",
+                "When enabled, PubChem enrichment is run automatically first to obtain InChIKeys, then cached Fiehn CFB/ClassyFire lookup fills Kingdom, Super class, Class, and Sub class."
+              )
+            ),
+
+            tags$hr(),
+            tags$h6(class = "fw-bold text-primary", "6. Output"),
             textInput(
               ns("output_dir"),
               "Output folder",
@@ -176,6 +200,8 @@ mod_kegg_database_ui <- function(id) {
                 bslib::nav_panel("Compounds", DT::dataTableOutput(ns("tbl_compounds"))),
                 bslib::nav_panel("MS2 Compounds", DT::dataTableOutput(ns("tbl_ms2_info"))),
                 bslib::nav_panel("MS2 Match Log", DT::dataTableOutput(ns("tbl_ms2_match_log"))),
+                bslib::nav_panel("PubChem Log", DT::dataTableOutput(ns("tbl_pubchem_log"))),
+                bslib::nav_panel("ClassyFire", DT::dataTableOutput(ns("tbl_classyfire"))),
                 bslib::nav_panel("Pathway QC", DT::dataTableOutput(ns("tbl_pathway_qc"))),
                 bslib::nav_panel("Review Prompt", verbatimTextOutput(ns("txt_review_prompt"), placeholder = TRUE)),
                 bslib::nav_panel("Pathway Map", DT::dataTableOutput(ns("tbl_pathway_map"))),
@@ -301,6 +327,13 @@ mod_kegg_database_server <- function(id, global_data = NULL) {
           review_min_pathway_specific_compounds = input$review_min_specific_compounds %||% NA_integer_,
           review_hub_compound_frequency_cutoff = input$review_hub_cutoff %||% NA_real_,
           review_prompt_max_pathways = input$review_prompt_max %||% NA_integer_,
+          use_pubchem = isTRUE(input$use_pubchem),
+          pubchem_sleep_sec = input$pubchem_sleep_sec %||% NA_real_,
+          pubchem_batch_size = input$pubchem_batch_size %||% NA_integer_,
+          pubchem_max_retries = input$pubchem_max_retries %||% NA_integer_,
+          use_classyfire = isTRUE(input$use_classyfire),
+          classyfire_sleep_sec = input$classyfire_sleep_sec %||% NA_real_,
+          classyfire_max_retries = input$classyfire_max_retries %||% NA_integer_,
           result_available = !is.null(state$result),
           status = state$status
         ),
@@ -317,6 +350,13 @@ mod_kegg_database_server <- function(id, global_data = NULL) {
         min_mw = input$min_mw,
         max_mw = input$max_mw,
         sleep_sec = input$sleep_sec,
+        use_pubchem = isTRUE(input$use_pubchem),
+        pubchem_sleep_sec = input$pubchem_sleep_sec %||% 1.2,
+        pubchem_batch_size = input$pubchem_batch_size %||% 25,
+        pubchem_max_retries = input$pubchem_max_retries %||% 3,
+        use_classyfire = isTRUE(input$use_classyfire),
+        classyfire_sleep_sec = input$classyfire_sleep_sec %||% 2,
+        classyfire_max_retries = input$classyfire_max_retries %||% 3,
         review_min_reaction_coverage = input$review_min_coverage,
         review_min_supported_reactions = input$review_min_reactions,
         review_min_pathway_specific_compounds = input$review_min_specific_compounds,
@@ -432,6 +472,22 @@ mod_kegg_database_server <- function(id, global_data = NULL) {
     output$tbl_ms2_match_log <- DT::renderDataTable({
       req(state$result)
       DT::datatable(state$result$ms2_match_log, options = list(scrollX = TRUE, pageLength = 10))
+    })
+    output$tbl_pubchem_log <- DT::renderDataTable({
+      req(state$result)
+      x <- state$result$pubchem_pugrest_log %||% data.frame()
+      if (nrow(x) == 0) {
+        x <- data.frame(message = "PubChem PUG-REST enrichment was not enabled or no requests were needed.")
+      }
+      DT::datatable(x, options = list(scrollX = TRUE, pageLength = 10))
+    })
+    output$tbl_classyfire <- DT::renderDataTable({
+      req(state$result)
+      x <- state$result$classyfire_classification %||% data.frame()
+      if (nrow(x) == 0) {
+        x <- data.frame(message = "ClassyFire classification was not enabled or no classification rows were generated.")
+      }
+      DT::datatable(x, options = list(scrollX = TRUE, pageLength = 10))
     })
     output$tbl_pathway_qc <- DT::renderDataTable({
       req(state$result)

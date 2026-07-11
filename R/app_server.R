@@ -92,6 +92,8 @@ app_server <- function(input, output, session) {
   mod_annotation_filter_server("annotation_filter_1", global_data = global_data, prj_init = prj_init)
   # AI-assisted annotation review
   mod_ai_annotation_server("ai_annotation_1", global_data = global_data, prj_init = prj_init)
+  # ClassyFire classification summary for final non-redundant annotations
+  mod_classification_server("classification_1", global_data = global_data)
   # differential abundance metabolite analysis
   mod_differential_analysis_server("differential_analysis_1", global_data = global_data, prj_init = prj_init)
   # pathway enrichment

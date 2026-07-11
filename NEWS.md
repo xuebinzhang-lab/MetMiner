@@ -9,11 +9,17 @@
 - **Exported `metminer_harmonize_sample_info()`** and added its help page, allowing project-level sample metadata to be overlaid onto imported `mass_dataset` objects across raw-data, table, and RDA import paths.
 - **Refined multi-database annotation handling** by normalizing empty and non-empty annotation tables, preserving database source labels, ranking candidates across databases, and adding database source type, annotation layer, evidence scope, core-adduct status, and confidence fields.
 - **Refreshed built-in PlantCyc/PMN local PGDB resources** for Arabidopsis, Brassica napus, tartary buckwheat, cotton, soybean, rice, tomato, wheat, maize, and the PlantCyc reference database, including regenerated MS2 match logs and manifest files.
+- **Updated all built-in PlantCyc resources with ClassyFire metadata**, adding `Kingdom`, `Super_class`, `Class`, and `Sub_class` coverage to packaged MS1/MS2 databases and compound metadata tables.
 - **Improved PlantCyc public MS2 matching** with InChIKey connectivity matches and formula compatibility checks that tolerate small hydrogen-count differences while requiring non-hydrogen atoms to agree.
 - **Improved PlantCyc enrichment ID recovery** by filling missing `PlantCyc.ID` values from built-in compound metadata using normalized names and mass checks before pathway enrichment.
 - **Added optional ClassyFire classification to the PlantCyc Local PGDB builder**, reusing the local PlantCyc classification cache before querying Fiehn CFB and propagating `Kingdom`, `Super_class`, `Class`, and `Sub_class` into PGDB-derived MS1/MS2 metadata.
 - **Removed QC samples automatically at the annotation entry point**, filtering `mass_dataset` sample metadata before metID matching because QC samples have completed their role after cleaning and feature-network construction.
+- **Added a ClassyFire Classification analysis module** for final non-redundant annotations, summarizing metabolites by `Super_class`, `Class`, and `Sub_class` with switchable static/interactive pie plots and downloadable tables.
+- **Defaulted Differential Analysis to clean non-redundant annotated metabolites**, building and saving `08.object_clean_annotated.rda` from the final annotation filter table, feature-network pseudo-areas, and representative features while keeping original POS/NEG feature-level modes available.
+- **Persisted and restored feature-network pseudo-area and clean annotation objects**, loading `06.pseudo_area_pos.rda`, `06.pseudo_area_neg.rda`, and `08.object_clean_annotated.rda` during project initialization so downstream DAM and reports can resume from saved projects.
+- **Added optional PubChem PUG-REST and ClassyFire enrichment to KEGG organism database construction**, preserving KEGG/metpath `CAS` and PubChem SID metadata by default and, when enabled, using cached throttled batch requests to add PubChem CID, InChI, InChIKey, SMILES, IUPAC name, CAS/RN cross references, and `Kingdom`/`Super_class`/`Class`/`Sub_class` taxonomy.
 - **Improved Feature Network MS2 and chromatogram review** by reusing existing MS2 assignments from normalized objects, making MS2 ZIP uploads optional when spectra are already attached, and allowing users to choose local raw files for EIC extraction.
+- **Added stage-specific Quarto report templates** for Data Cleaning, Feature Annotation, and Differential Analysis + Enrichment, and refreshed the QC report citation text to reference TidyMass2.
 
 *Co-authored with Codex (OpenAI GPT-5) and Shawn*
 

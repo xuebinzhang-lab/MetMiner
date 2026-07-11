@@ -17,10 +17,14 @@ mod_differential_analysis_ui <- function(id) {
         tags$h6(class = "fw-bold text-primary", "1. Data and groups"),
         radioButtons(
           ns("mode"),
-          "Ion mode",
-          choices = c("Positive + Negative" = "merged", "Positive" = "positive", "Negative" = "negative"),
-          selected = "merged",
-          inline = TRUE
+          "Analysis unit",
+          choices = c(
+            "Clean annotated metabolites" = "clean",
+            "Original positive features" = "positive",
+            "Original negative features" = "negative",
+            "Original positive + negative features" = "merged"
+          ),
+          selected = "clean"
         ),
         uiOutput(ns("group_controls")),
         tags$hr(),
@@ -28,9 +32,9 @@ mod_differential_analysis_ui <- function(id) {
         selectInput(ns("mean_median"), "Summary statistic", choices = c("Mean" = "mean", "Median" = "median"), selected = "mean"),
         selectInput(ns("test_method"), "Group test", choices = c("t test" = "t.test", "Wilcoxon" = "wilcox.test"), selected = "t.test"),
         selectInput(ns("p_adjust"), "P adjustment", choices = c("BH", "holm", "hochberg", "hommel", "bonferroni", "BY", "fdr", "none"), selected = "BH"),
-        numericInput(ns("fc_cutoff"), "Fold-change cutoff", value = 1.5, min = 1, step = 0.1),
-        numericInput(ns("p_cutoff"), "P/FDR cutoff", value = 0.05, min = 0, max = 1, step = 0.01),
-        checkboxInput(ns("use_fdr"), "Use FDR for significance", value = TRUE),
+        numericInput(ns("fc_cutoff"), "Fold-change cutoff", value = 1.2, min = 1, step = 0.1),
+        numericInput(ns("p_cutoff"), "P-value cutoff", value = 0.05, min = 0, max = 1, step = 0.01),
+        checkboxInput(ns("use_fdr"), "Use FDR for significance", value = FALSE),
         tags$hr(),
         checkboxInput(ns("interactive_volcano"), "Interactive volcano", value = TRUE),
         checkboxInput(ns("volcano_annotated_only"), "Show annotated points only in volcano", value = FALSE),
@@ -46,7 +50,7 @@ mod_differential_analysis_ui <- function(id) {
         h3("Differential Abundance Metabolites", class = "text-primary fw-bold"),
         bslib::layout_columns(
           col_widths = c(3, 3, 3, 3),
-          bslib::value_box("Features", textOutput(ns("value_features"), inline = TRUE), showcase = bsicons::bs_icon("grid")),
+          bslib::value_box("Metabolites", textOutput(ns("value_features"), inline = TRUE), showcase = bsicons::bs_icon("grid")),
           bslib::value_box("Up", textOutput(ns("value_up"), inline = TRUE), showcase = bsicons::bs_icon("arrow-up-circle")),
           bslib::value_box("Down", textOutput(ns("value_down"), inline = TRUE), showcase = bsicons::bs_icon("arrow-down-circle")),
           bslib::value_box("OPLS-DA", textOutput(ns("value_opls"), inline = TRUE), showcase = bsicons::bs_icon("diagram-2"))
@@ -103,8 +107,28 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
     ns <- session$ns
     state <- reactiveValues(result = NULL, status = "No differential analysis result yet.", selected_feature = NULL, object = NULL, opls = NULL, opls_status = "Lightweight OPLS-DA has not been evaluated.")
 
+    clean_object <- reactive({
+      if (!is.null(global_data$object_clean_annotated)) return(global_data$object_clean_annotated)
+      req(global_data$annotation_filter_result)
+      obj <- metminer_build_clean_annotation_dataset(
+        annotation_filter_result = global_data$annotation_filter_result,
+        positive_object = global_data$object_pos_norm,
+        negative_object = global_data$object_neg_norm,
+        pseudo_area_pos = global_data$pseudo_area_pos,
+        pseudo_area_neg = global_data$pseudo_area_neg
+      )
+      global_data$object_clean_annotated <- obj
+      if (!is.null(prj_init$mass_dataset_dir)) {
+        object_clean_annotated <- obj
+        save(object_clean_annotated, file = file.path(prj_init$mass_dataset_dir, "08.object_clean_annotated.rda"))
+      }
+      obj
+    })
+
     current_object <- reactive({
-      metminer_analysis_object(global_data, input$mode %||% "positive")
+      mode <- input$mode %||% "clean"
+      if (identical(mode, "clean")) return(clean_object())
+      metminer_analysis_object(global_data, mode)
     })
 
     current_polarity_objects <- reactive({
@@ -119,7 +143,7 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
       res <- state$result$result %||% data.frame()
       global_data$differential_advisor_state <- list(
         available = TRUE,
-        mode = input$mode %||% "positive",
+        mode = input$mode %||% "clean",
         group_column = input$group_column %||% NA_character_,
         comparison_pair = input$comparison_pair %||% NA_character_,
         control_group = cmp$control_group %||% NA_character_,
@@ -185,12 +209,13 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
         return()
       }
       tryCatch({
+        dam_mode <- if (identical(input$mode, "clean")) "merged" else input$mode
         res <- metminer_run_dam(
           object = obj,
           group_column = input$group_column,
           control_group = cmp$control_group,
           case_group = cmp$case_group,
-          mode = input$mode,
+          mode = dam_mode,
           annotation_filter_result = global_data$annotation_filter_result,
           mean_median = input$mean_median,
           test_method = input$test_method,
@@ -214,17 +239,17 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
             scale = input$opls_scale
           )
           state$opls <- metminer_extract_oplsda_result(state$object)
-          state$result$result <- metminer_extract_dam_table(state$object, global_data$annotation_filter_result, input$mode, state$result$p_column)
+          state$result$result <- metminer_extract_dam_table(state$object, global_data$annotation_filter_result, dam_mode, state$result$p_column)
           state$opls_status <- paste0(opls$message, "\nLightweight OPLS-DA model fitted with one predictive and one orthogonal component.")
         } else if (isTRUE(input$run_opls) && !isTRUE(opls$ready)) {
           state$opls_status <- paste0(opls$message, "\nLightweight OPLS-DA was not fitted.")
         }
         state$status <- paste0(
           "Comparison: ", cmp$case_group, " vs ", cmp$control_group, "\n",
-          "Mode: ", if (identical(input$mode, "merged")) "positive + negative" else input$mode, "\n",
+          "Analysis unit: ", if (identical(input$mode, "clean")) "clean annotated metabolites" else input$mode, "\n",
           "Control samples: ", length(res$control_ids), "\n",
           "Case samples: ", length(res$case_ids), "\n",
-          "Features tested: ", nrow(res$result), "\n",
+          "Metabolites/features tested: ", nrow(res$result), "\n",
           "Up: ", sum(res$result$change == "Up", na.rm = TRUE), "\n",
           "Down: ", sum(res$result$change == "Down", na.rm = TRUE), "\n",
           opls$message
@@ -324,9 +349,20 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
       x[x$variable_id == state$selected_feature, , drop = FALSE]
     })
 
+    selected_display_feature <- reactive({
+      row <- selected_row()
+      if ("representative_feature" %in% colnames(row) && has_text(row$representative_feature[1])) {
+        return(as.character(row$representative_feature[1]))
+      }
+      if ("representative_feature.x" %in% colnames(row) && has_text(row$representative_feature.x[1])) {
+        return(as.character(row$representative_feature.x[1]))
+      }
+      state$selected_feature
+    })
+
     output$tbl_feature_annotation <- DT::renderDataTable({
       row <- selected_row()
-      keep <- intersect(c("variable_id", "Compound.name", "KEGG.ID", "PlantCyc.ID", "Lab.ID", "Adduct", "Database", "Level", "fc", "log2_fc", "p_value", "p_value_adjust", "change", "opls_vip_like", "opls_loading_predictive", "opls_loading_orthogonal"), colnames(row))
+      keep <- intersect(c("variable_id", "representative_feature", "Compound.name", "KEGG.ID", "PlantCyc.ID", "Lab.ID", "Adduct", "Database", "Level", "fc", "log2_fc", "p_value", "p_value_adjust", "change", "opls_vip_like", "opls_loading_predictive", "opls_loading_orthogonal"), colnames(row))
       DT::datatable(row[, keep, drop = FALSE], rownames = FALSE, options = list(dom = "t", scrollX = TRUE))
     })
 
@@ -347,19 +383,20 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
     output$eic_plot <- plotly::renderPlotly({
       req(state$object, state$selected_feature)
       objs <- current_polarity_objects()
-      eic <- if (identical(input$mode, "merged")) {
+      display_feature <- selected_display_feature()
+      eic <- if (input$mode %in% c("clean", "merged")) {
         make_feature_eic_data(
           wd = prj_init$wd,
           positive_object = objs$positive,
           negative_object = objs$negative,
-          feature_id = state$selected_feature,
+          feature_id = display_feature,
           max_traces = 8
         )
       } else {
         make_feature_eic_data(
           wd = prj_init$wd,
           object = state$object,
-          feature_id = state$selected_feature,
+          feature_id = display_feature,
           mode = input$mode,
           max_traces = 8
         )
@@ -370,11 +407,12 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
     output$ms2_plot <- plotly::renderPlotly({
       req(state$object, state$selected_feature)
       objs <- current_polarity_objects()
-      dat <- if (identical(input$mode, "merged")) {
+      display_feature <- selected_display_feature()
+      dat <- if (input$mode %in% c("clean", "merged")) {
         make_ms2_spectrum_data(
           positive_object = objs$positive,
           negative_object = objs$negative,
-          feature_id = state$selected_feature,
+          feature_id = display_feature,
           mz_tol = 0.02,
           ms2_mz_tol_ppm = 5,
           ms2_rt_tol = 10,
@@ -383,7 +421,7 @@ mod_differential_analysis_server <- function(id, global_data, prj_init) {
       } else {
         make_ms2_spectrum_data(
           object = state$object,
-          feature_id = state$selected_feature,
+          feature_id = display_feature,
           mz_tol = 0.02,
           ms2_mz_tol_ppm = 5,
           ms2_rt_tol = 10,

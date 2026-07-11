@@ -1,0 +1,902 @@
+---
+title: "Data Cleaning Report"
+date: last-modified
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    number-sections: true
+    self-contained: true
+    code-tools: false
+    smooth-scroll: true
+params:
+  work_dir: null
+  objects: null
+  metadata: null
+  cleaning_params: null
+editor:
+  markdown:
+    wrap: sentence
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  fig.width = 10,
+  fig.height = 6
+)
+
+library(massdataset)
+library(massqc)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(plotly)
+
+`%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || all(is.na(x))) y else x
+
+work_dir <- params$work_dir %||% "."
+
+step_info <- data.frame(
+  step_id = c("raw", "clean", "outlier", "impute", "norm"),
+  step_label = c(
+    "Raw peak table",
+    "Noise removal",
+    "Outlier detection",
+    "Missing value imputation",
+    "Normalization"
+  ),
+  pos_name = c(
+    "object_pos_raw",
+    "object_pos_clean",
+    "object_pos_outlier",
+    "object_pos_impute",
+    "object_pos_norm"
+  ),
+  neg_name = c(
+    "object_neg_raw",
+    "object_neg_clean",
+    "object_neg_outlier",
+    "object_neg_impute",
+    "object_neg_norm"
+  ),
+  stringsAsFactors = FALSE
+)
+
+candidate_paths <- function(mode, step_id, object_name) {
+  mode <- tolower(mode)
+  aliases <- c(
+    paste0(object_name, ".rds"),
+    paste0(object_name, ".RDS"),
+    paste0(object_name, ".rda"),
+    paste0(object_name, ".RData")
+  )
+  legacy <- switch(
+    paste(mode, step_id, sep = "_"),
+    "pos_raw" = c("object_pos.rds", "object_pos_raw.rds", "01.object_pos_raw.rda"),
+    "neg_raw" = c("object_neg.rds", "object_neg_raw.rds", "01.object_neg_raw.rda"),
+    "pos_clean" = c("object_pos_clean.rds", "object_pos_mv.rds", "02.object_pos_mv.rda"),
+    "neg_clean" = c("object_neg_clean.rds", "object_neg_mv.rds", "02.object_neg_mv.rda"),
+    "pos_outlier" = c("object_pos_outlier.rds", "03.object_pos_outlier.rda"),
+    "neg_outlier" = c("object_neg_outlier.rds", "03.object_neg_outlier.rda"),
+    "pos_impute" = c("object_pos_impute.rds", "04.object_pos_impute.rda"),
+    "neg_impute" = c("object_neg_impute.rds", "04.object_neg_impute.rda"),
+    "pos_norm" = c("object_pos_norm.rds", "05.object_pos_norm.rda"),
+    "neg_norm" = c("object_neg_norm.rds", "05.object_neg_norm.rda"),
+    character()
+  )
+  candidates <- c(aliases, legacy)
+  unique(c(
+    file.path(work_dir, candidates),
+    file.path(work_dir, "objects", candidates)
+  ))
+}
+
+load_mass_object <- function(paths, object_name = NULL) {
+  paths <- paths[file.exists(paths)]
+  if (length(paths) == 0) return(NULL)
+  path <- paths[1]
+  ext <- tolower(tools::file_ext(path))
+  if (ext == "rds") {
+    obj <- readRDS(path)
+    if (inherits(obj, "mass_dataset")) return(obj)
+    return(NULL)
+  }
+  e <- new.env(parent = emptyenv())
+  load(path, envir = e)
+  if (!is.null(object_name) && exists(object_name, envir = e, inherits = FALSE)) {
+    obj <- get(object_name, envir = e)
+    if (inherits(obj, "mass_dataset")) return(obj)
+  }
+  objects <- mget(ls(e), envir = e)
+  hits <- objects[vapply(objects, inherits, logical(1), what = "mass_dataset")]
+  if (length(hits) == 0) return(NULL)
+  hits[[1]]
+}
+
+object_from_param <- function(mode, step_id) {
+  obj_map <- params$objects
+  if (is.null(obj_map)) return(NULL)
+  key <- paste(tolower(mode), step_id, sep = "_")
+  value <- obj_map[[key]] %||% obj_map[[toupper(mode)]][[step_id]] %||% NULL
+  if (is.null(value)) return(NULL)
+  if (inherits(value, "mass_dataset")) return(value)
+  if (is.character(value)) return(load_mass_object(value))
+  NULL
+}
+
+objects_by_step <- lapply(seq_len(nrow(step_info)), function(i) {
+  step_id <- step_info$step_id[[i]]
+  list(
+    POS = object_from_param("pos", step_id) %||%
+      load_mass_object(candidate_paths("pos", step_id, step_info$pos_name[[i]]), step_info$pos_name[[i]]),
+    NEG = object_from_param("neg", step_id) %||%
+      load_mass_object(candidate_paths("neg", step_id, step_info$neg_name[[i]]), step_info$neg_name[[i]])
+  )
+})
+names(objects_by_step) <- step_info$step_id
+
+available_object <- function(mode = c("POS", "NEG")) {
+  mode <- match.arg(mode)
+  for (step_id in rev(names(objects_by_step))) {
+    obj <- objects_by_step[[step_id]][[mode]]
+    if (!is.null(obj)) return(obj)
+  }
+  NULL
+}
+
+object_status <- function(obj) {
+  if (is.null(obj)) {
+    return(data.frame(
+      samples = NA_integer_,
+      variables = NA_integer_,
+      missing_values = NA_integer_,
+      missing_fraction = NA_real_,
+      zero_values = NA_integer_,
+      zero_fraction = NA_real_,
+      qc_samples = NA_integer_,
+      biological_samples = NA_integer_
+    ))
+  }
+  expr <- as.matrix(massdataset::extract_expression_data(obj))
+  sample_info <- as.data.frame(massdataset::extract_sample_info(obj), stringsAsFactors = FALSE)
+  class_col <- first_existing_col(sample_info, c("class", "sample_type", "sample_class"))
+  sample_class <- if (!is.null(class_col)) tolower(as.character(sample_info[[class_col]])) else rep("", nrow(sample_info))
+  data.frame(
+    samples = ncol(expr),
+    variables = nrow(expr),
+    missing_values = sum(is.na(expr)),
+    missing_fraction = mean(is.na(expr)),
+    zero_values = sum(expr == 0, na.rm = TRUE),
+    zero_fraction = mean(expr == 0, na.rm = TRUE),
+    qc_samples = sum(sample_class == "qc", na.rm = TRUE),
+    biological_samples = sum(!sample_class %in% c("qc", "blank", ""), na.rm = TRUE)
+  )
+}
+
+first_existing_col <- function(df, candidates) {
+  hit <- candidates[candidates %in% colnames(df)]
+  if (length(hit) == 0) return(NULL)
+  hit[1]
+}
+
+plot_color_column <- function(obj) {
+  if (is.null(obj)) return(NULL)
+  sample_info <- as.data.frame(massdataset::extract_sample_info(obj), stringsAsFactors = FALSE)
+  if ("group" %in% colnames(sample_info)) {
+    n_group <- length(unique(stats::na.omit(as.character(sample_info$group))))
+    if (is.finite(n_group) && n_group <= 15) return("group")
+  }
+  first_existing_col(sample_info, c("class", "sample_type", "sample_class", "group", "batch", "sample_id"))
+}
+
+sample_order_column <- function(obj) {
+  if (is.null(obj)) return("sample_id")
+  sample_info <- as.data.frame(massdataset::extract_sample_info(obj), stringsAsFactors = FALSE)
+  first_existing_col(sample_info, c("injection.order", "injection_order", "sample_id")) %||% "sample_id"
+}
+
+sample_count <- function(obj) {
+  if (is.null(obj)) return(0L)
+  ncol(as.matrix(massdataset::extract_expression_data(obj)))
+}
+
+interactive_plot <- function(obj) {
+  sample_count(obj) <= 1000
+}
+
+render_report_plot <- function(plot, obj) {
+  if (is.null(plot)) return(invisible(NULL))
+  if (interactive_plot(obj)) {
+    return(plotly::ggplotly(plot) |>
+      plotly::layout(legend = list(orientation = "v")))
+  } else {
+    return(plot)
+  }
+}
+
+plot_mode_label <- function(obj) {
+  if (interactive_plot(obj)) {
+    paste0("Interactive plotly rendering is enabled because this object has ", sample_count(obj), " samples (threshold <= 1000).")
+  } else {
+    paste0("Static rendering is used because this object has ", sample_count(obj), " samples (threshold > 1000).")
+  }
+}
+
+safe_log_scale <- function(obj, scale = TRUE) {
+  if (is.null(obj)) return(NULL)
+  temp <- log(obj + 1, 2)
+  if (scale) {
+    ed <- temp@expression_data
+    scaled <- t(scale(t(ed)))
+    scaled[!is.finite(scaled)] <- 0
+    temp@expression_data <- as.data.frame(scaled)
+  }
+  temp
+}
+
+status_table <- do.call(rbind, lapply(seq_len(nrow(step_info)), function(i) {
+  step_id <- step_info$step_id[[i]]
+  step_label <- step_info$step_label[[i]]
+  do.call(rbind, lapply(c("POS", "NEG"), function(mode) {
+    data.frame(
+      step = step_label,
+      step_id = step_id,
+      mode = mode,
+      object_status(objects_by_step[[step_id]][[mode]]),
+      row.names = NULL
+    )
+  }))
+}))
+
+status_table <- status_table |>
+  group_by(mode) |>
+  mutate(
+    variables_removed_from_previous = lag(variables) - variables,
+    samples_removed_from_previous = lag(samples) - samples,
+    missing_fraction_delta = missing_fraction - lag(missing_fraction)
+  ) |>
+  ungroup()
+
+fmt_pct <- function(x) {
+  ifelse(is.na(x), NA_character_, sprintf("%.2f%%", x * 100))
+}
+
+fmt_int <- function(x) {
+  ifelse(is.na(x), NA_character_, format(as.integer(round(x)), big.mark = ","))
+}
+
+fmt_method <- function(x) {
+  if (is.null(x) || length(x) == 0 || is.na(x[1]) || !nzchar(as.character(x[1]))) return("not specified")
+  as.character(x[1])
+}
+
+get_param <- function(section, key, default = "not specified") {
+  values <- cleaning_params[[section]]
+  if (is.null(values) || is.null(values[[key]])) return(default)
+  fmt_method(values[[key]])
+}
+
+sample_ids <- function(obj) {
+  if (is.null(obj)) return(character())
+  info <- as.data.frame(massdataset::extract_sample_info(obj), stringsAsFactors = FALSE)
+  if (!"sample_id" %in% colnames(info)) return(character())
+  as.character(info$sample_id)
+}
+
+removed_samples <- function(mode) {
+  before <- sample_ids(objects_by_step$clean[[mode]])
+  after <- sample_ids(objects_by_step$outlier[[mode]])
+  setdiff(before, after)
+}
+
+row_for <- function(step_id, mode) {
+  hit <- which(as.character(status_table$step_id) == as.character(step_id) &
+                 as.character(status_table$mode) == as.character(mode))
+  if (length(hit) == 0) return(status_table[0, , drop = FALSE])
+  status_table[hit[1], , drop = FALSE]
+}
+
+status_value <- function(step_id, mode, col) {
+  row <- row_for(step_id, mode)
+  if (nrow(row) == 0 || !col %in% colnames(row)) return(NA)
+  row[[col]][[1]]
+}
+
+highlight_numbers <- function(items) {
+  paste(sprintf("**%s**", items), collapse = ", ")
+}
+
+method_label_outlier <- function() {
+  method <- tolower(get_param("outlier_detection", "outlier_method", "auto"))
+  if (method %in% c("auto", "tidymass", "by tidymass")) {
+    paste0("TidyMass automatic detection", " (criteria: ", get_param("outlier_detection", "auto_criteria", "any"), ")")
+  } else if (method %in% c("manual", "by myself")) {
+    "manual selection"
+  } else {
+    method
+  }
+}
+
+integration_label <- function() {
+  obj <- objects_by_step$norm$POS %||% objects_by_step$norm$NEG
+  integ <- get_param("normalization", "integ_method", "qc_mean")
+  if (is.null(obj)) return(paste("batch integration method was set to", integ))
+  info <- as.data.frame(massdataset::extract_sample_info(obj), stringsAsFactors = FALSE)
+  if (!"batch" %in% colnames(info) || length(unique(stats::na.omit(as.character(info$batch)))) <= 1) {
+    return("batch integration was skipped because only one batch was detected")
+  }
+  paste("batch integration used", integ)
+}
+
+callout <- function(title, text) {
+  cat("::: {.callout-important appearance=\"simple\" icon=\"false\"}\n")
+  cat("## ", title, "\n\n", sep = "")
+  cat(text, "\n")
+  cat(":::\n")
+}
+
+display_status <- status_table |>
+  mutate(
+    missing_fraction = fmt_pct(missing_fraction),
+    zero_fraction = fmt_pct(zero_fraction),
+    missing_fraction_delta = fmt_pct(missing_fraction_delta)
+  )
+
+cleaning_params <- params$cleaning_params %||% list()
+```
+
+::: {.callout-note icon="false" appearance="simple"}
+## Report Information
+
+**Software**: [MetMiner by Wang et al., 2024](https://github.com/ShawnWx2019/MetMiner), powered by [TidyMass2 by Wang et al., 2026](https://www.nature.com/articles/s41467-026-68464-7)
+
+**Date**: `r format(Sys.Date(), '%Y-%m-%d')`
+
+**Generated By**: [MetMiner-shinyapp](https://github.com/ShawnWx2019/MetMiner)
+:::
+
+------------------------------------------------------------------------
+
+# Introduction
+
+This report summarizes the step-by-step data cleaning workflow after peak picking.
+It tracks how the `mass_dataset` object changes through noise removal, sample outlier handling, missing-value imputation, and normalization.
+
+The PCA and sample-missing-value plots automatically choose the visual grouping column:
+when the number of `group` levels is 15 or fewer, `group` is used; otherwise the report falls back to `class` or an equivalent sample class column.
+
+------------------------------------------------------------------------
+
+# Workflow Summary
+
+```{r workflow-summary}
+knitr::kable(
+  display_status |>
+    select(
+      mode, step, samples, variables, missing_values, missing_fraction,
+      zero_values, zero_fraction, qc_samples, biological_samples,
+      variables_removed_from_previous, samples_removed_from_previous,
+      missing_fraction_delta
+    ),
+  caption = "Mass dataset status at each data-cleaning step."
+)
+```
+
+```{r}
+#| label: workflow-change-plot
+#| fig-height: 5
+status_plot_data <- status_table |>
+  filter(!is.na(variables)) |>
+  mutate(step = factor(step, levels = step_info$step_label))
+
+p <- ggplot(status_plot_data, aes(step, variables, group = mode, color = mode)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2.5) +
+  labs(x = NULL, y = "Feature number", title = "Feature Retention Across Data Cleaning") +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+p
+```
+
+```{r}
+#| label: missing-change-plot
+#| fig-height: 5
+p <- ggplot(status_plot_data, aes(step, missing_fraction * 100, group = mode, color = mode)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2.5) +
+  labs(x = NULL, y = "Missing values (%)", title = "Missing-Value Fraction Across Data Cleaning") +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+p
+```
+
+::: {.callout-tip title="Figure Legend" collapse="true"}
+These overview plots track the number of retained features and the missing-value fraction across the full cleaning workflow.
+
+- `r plot_mode_label(available_object("POS") %||% available_object("NEG"))`
+- A steep feature decrease is expected during noise removal; missing values should approach zero after imputation.
+:::
+
+------------------------------------------------------------------------
+
+# Step-by-Step Diagnostics
+
+## Raw Peak Table
+
+::: panel-tabset
+### POS
+
+```{r}
+#| label: raw-pos-plots
+#| fig-height: 6
+obj <- objects_by_step$raw$POS
+if (!is.null(obj)) {
+  color_col <- plot_color_column(obj)
+  order_col <- sample_order_column(obj)
+  p1 <- massdataset::show_sample_missing_values(obj, color_by = color_col, order_by = order_col, percentage = TRUE) +
+    ggtitle(paste0("POS Raw Missing Values (colored by ", color_col, ")")) +
+    theme_light() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  render_report_plot(p1, obj)
+}
+```
+
+```{r}
+#| label: raw-pos-pca
+#| fig-height: 6
+obj <- objects_by_step$raw$POS
+if (!is.null(obj)) {
+  color_col <- plot_color_column(obj)
+  p <- massqc::massqc_pca(safe_log_scale(obj, scale = TRUE), color_by = color_col, order_by = "sample_id") +
+    ggtitle(paste0("POS Raw PCA (colored by ", color_col, ")")) +
+    theme_light()
+  render_report_plot(p, obj)
+}
+```
+
+### NEG
+
+```{r}
+#| label: raw-neg-plots
+#| fig-height: 6
+obj <- objects_by_step$raw$NEG
+if (!is.null(obj)) {
+  color_col <- plot_color_column(obj)
+  order_col <- sample_order_column(obj)
+  p1 <- massdataset::show_sample_missing_values(obj, color_by = color_col, order_by = order_col, percentage = TRUE) +
+    ggtitle(paste0("NEG Raw Missing Values (colored by ", color_col, ")")) +
+    theme_light() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  render_report_plot(p1, obj)
+}
+```
+
+```{r}
+#| label: raw-neg-pca
+#| fig-height: 6
+obj <- objects_by_step$raw$NEG
+if (!is.null(obj)) {
+  color_col <- plot_color_column(obj)
+  p <- massqc::massqc_pca(safe_log_scale(obj, scale = TRUE), color_by = color_col, order_by = "sample_id") +
+    ggtitle(paste0("NEG Raw PCA (colored by ", color_col, ")")) +
+    theme_light()
+  render_report_plot(p, obj)
+}
+```
+:::
+
+::: {.callout-tip title="Figure Legend" collapse="true"}
+Raw peak-table plots show sample-level missing-value structure and PCA separation before data cleaning.
+
+- **Color**: automatically uses `group` when there are 15 or fewer groups; otherwise it falls back to `class`.
+- `r plot_mode_label(objects_by_step$raw$POS %||% objects_by_step$raw$NEG)`
+- QC samples should cluster tightly in PCA and should not show unexpectedly high missing-value rates.
+:::
+
+## Noise Removal
+
+```{r}
+#| label: noise-removal-conclusion
+#| results: asis
+pos_removed <- status_value("clean", "POS", "variables_removed_from_previous")
+neg_removed <- status_value("clean", "NEG", "variables_removed_from_previous")
+pos_after <- status_value("clean", "POS", "variables")
+neg_after <- status_value("clean", "NEG", "variables")
+pos_mv <- status_value("clean", "POS", "missing_fraction")
+neg_mv <- status_value("clean", "NEG", "missing_fraction")
+method_bits <- c(
+  paste0("missing-value filter: QC <= ", fmt_pct(as.numeric(get_param("remove_noise", "qc_na_freq", 0.2))),
+         ", Subject <= ", fmt_pct(as.numeric(get_param("remove_noise", "s_na_freq", 0.5)))),
+  paste0("QC RSD filter: ", get_param("remove_noise", "rm_noise_rsd", "TRUE"),
+         " at ", get_param("remove_noise", "qc_rsd", "30"), "%"),
+  paste0("intensity filter: ", get_param("remove_noise", "rm_intensity", "FALSE"))
+)
+callout(
+  "Noise removal conclusion",
+  paste0(
+    "Noise removal used ", paste(method_bits, collapse = "; "), ". ",
+    "It removed ", highlight_numbers(c(paste(fmt_int(pos_removed), "POS features"), paste(fmt_int(neg_removed), "NEG features"))),
+    ", retaining ", highlight_numbers(c(paste(fmt_int(pos_after), "POS features"), paste(fmt_int(neg_after), "NEG features"))),
+    ". The remaining missing-value fractions were ",
+    highlight_numbers(c(paste0("POS ", fmt_pct(pos_mv)), paste0("NEG ", fmt_pct(neg_mv)))), "."
+  )
+)
+```
+
+```{r noise-removal-table}
+noise_tbl <- status_table |>
+  filter(step_id %in% c("raw", "clean")) |>
+  select(mode, step, samples, variables, missing_fraction, variables_removed_from_previous, missing_fraction_delta)
+knitr::kable(
+  noise_tbl |>
+    mutate(missing_fraction = fmt_pct(missing_fraction), missing_fraction_delta = fmt_pct(missing_fraction_delta)),
+  caption = "Changes after noise removal."
+)
+```
+
+::: panel-tabset
+### POS
+
+```{r}
+#| label: clean-pos-missing
+#| fig-height: 6
+obj <- objects_by_step$clean$POS
+if (!is.null(obj)) {
+  color_col <- plot_color_column(obj)
+  order_col <- sample_order_column(obj)
+  p <- massdataset::show_sample_missing_values(obj, color_by = color_col, order_by = order_col, percentage = TRUE) +
+    ggtitle(paste0("POS After Noise Removal (colored by ", color_col, ")")) +
+    theme_light() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  render_report_plot(p, obj)
+}
+```
+
+### NEG
+
+```{r}
+#| label: clean-neg-missing
+#| fig-height: 6
+obj <- objects_by_step$clean$NEG
+if (!is.null(obj)) {
+  color_col <- plot_color_column(obj)
+  order_col <- sample_order_column(obj)
+  p <- massdataset::show_sample_missing_values(obj, color_by = color_col, order_by = order_col, percentage = TRUE) +
+    ggtitle(paste0("NEG After Noise Removal (colored by ", color_col, ")")) +
+    theme_light() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  render_report_plot(p, obj)
+}
+```
+:::
+
+::: {.callout-tip title="Figure Legend" collapse="true"}
+Noise-removal plots show the sample missing-value profile after feature filtering.
+
+- **Color**: selected by the same group/class rule used throughout this report.
+- `r plot_mode_label(objects_by_step$clean$POS %||% objects_by_step$clean$NEG)`
+- Remaining high missing-value samples after this step may require outlier review.
+:::
+
+## Outlier Detection
+
+```{r}
+#| label: outlier-conclusion
+#| results: asis
+pos_removed_samples <- removed_samples("POS")
+neg_removed_samples <- removed_samples("NEG")
+pos_removed_n <- length(pos_removed_samples)
+neg_removed_n <- length(neg_removed_samples)
+sample_text <- function(ids) if (length(ids) == 0) "none" else paste(ids, collapse = ", ")
+callout(
+  "Outlier detection conclusion",
+  paste0(
+    "Outlier detection used ", highlight_numbers(method_label_outlier()), ". ",
+    "It removed ", highlight_numbers(c(paste(pos_removed_n, "POS samples"), paste(neg_removed_n, "NEG samples"))), ". ",
+    "Removed materials: POS ", highlight_numbers(sample_text(pos_removed_samples)),
+    "; NEG ", highlight_numbers(sample_text(neg_removed_samples)), "."
+  )
+)
+```
+
+```{r outlier-table}
+outlier_tbl <- status_table |>
+  filter(step_id %in% c("clean", "outlier")) |>
+  select(mode, step, samples, variables, samples_removed_from_previous, missing_fraction)
+knitr::kable(
+  outlier_tbl |>
+    mutate(missing_fraction = fmt_pct(missing_fraction)),
+  caption = "Changes after sample outlier detection."
+)
+```
+
+::: panel-tabset
+### POS
+
+```{r}
+#| label: outlier-pos-pca
+#| fig-height: 6
+obj <- objects_by_step$outlier$POS
+if (!is.null(obj)) {
+  color_col <- plot_color_column(obj)
+  p <- massqc::massqc_pca(safe_log_scale(obj, scale = TRUE), color_by = color_col, order_by = "sample_id") +
+    ggtitle(paste0("POS After Outlier Detection (colored by ", color_col, ")")) +
+    theme_light()
+  render_report_plot(p, obj)
+}
+```
+
+### NEG
+
+```{r}
+#| label: outlier-neg-pca
+#| fig-height: 6
+obj <- objects_by_step$outlier$NEG
+if (!is.null(obj)) {
+  color_col <- plot_color_column(obj)
+  p <- massqc::massqc_pca(safe_log_scale(obj, scale = TRUE), color_by = color_col, order_by = "sample_id") +
+    ggtitle(paste0("NEG After Outlier Detection (colored by ", color_col, ")")) +
+    theme_light()
+  render_report_plot(p, obj)
+}
+```
+:::
+
+::: {.callout-tip title="Figure Legend" collapse="true"}
+Outlier-detection PCA shows whether sample-level outliers remain after automatic or manual sample removal.
+
+- **Color**: selected by the group/class rule.
+- `r plot_mode_label(objects_by_step$outlier$POS %||% objects_by_step$outlier$NEG)`
+- Removed samples are listed in the conclusion above the table.
+:::
+
+## Missing Value Imputation
+
+```{r}
+#| label: imputation-conclusion
+#| results: asis
+method <- get_param("missing_value_imputation", "impute_method", "knn")
+pos_before <- status_value("outlier", "POS", "missing_fraction")
+neg_before <- status_value("outlier", "NEG", "missing_fraction")
+pos_after <- status_value("impute", "POS", "missing_fraction")
+neg_after <- status_value("impute", "NEG", "missing_fraction")
+callout(
+  "Missing-value imputation conclusion",
+  paste0(
+    "Missing values were imputed with ", highlight_numbers(toupper(method)), ". ",
+    "Missing-value fraction changed from ",
+    highlight_numbers(c(paste0("POS ", fmt_pct(pos_before), " to ", fmt_pct(pos_after)),
+                        paste0("NEG ", fmt_pct(neg_before), " to ", fmt_pct(neg_after)))), "."
+  )
+)
+```
+
+```{r imputation-table}
+impute_tbl <- status_table |>
+  filter(step_id %in% c("outlier", "impute")) |>
+  select(mode, step, samples, variables, missing_values, missing_fraction, missing_fraction_delta)
+knitr::kable(
+  impute_tbl |>
+    mutate(missing_fraction = fmt_pct(missing_fraction), missing_fraction_delta = fmt_pct(missing_fraction_delta)),
+  caption = "Changes after missing-value imputation."
+)
+```
+
+::: panel-tabset
+### POS
+
+```{r}
+#| label: impute-pos-pca
+#| fig-height: 6
+obj <- objects_by_step$impute$POS
+if (!is.null(obj)) {
+  color_col <- plot_color_column(obj)
+  p <- massqc::massqc_pca(safe_log_scale(obj, scale = TRUE), color_by = color_col, order_by = "sample_id") +
+    ggtitle(paste0("POS After Imputation (colored by ", color_col, ")")) +
+    theme_light()
+  render_report_plot(p, obj)
+}
+```
+
+### NEG
+
+```{r}
+#| label: impute-neg-pca
+#| fig-height: 6
+obj <- objects_by_step$impute$NEG
+if (!is.null(obj)) {
+  color_col <- plot_color_column(obj)
+  p <- massqc::massqc_pca(safe_log_scale(obj, scale = TRUE), color_by = color_col, order_by = "sample_id") +
+    ggtitle(paste0("NEG After Imputation (colored by ", color_col, ")")) +
+    theme_light()
+  render_report_plot(p, obj)
+}
+```
+:::
+
+::: {.callout-tip title="Figure Legend" collapse="true"}
+Imputation PCA checks whether missing-value filling changed the global sample structure.
+
+- **Color**: selected by the group/class rule.
+- `r plot_mode_label(objects_by_step$impute$POS %||% objects_by_step$impute$NEG)`
+- PCA should remain biologically interpretable after imputation; strong shifts may indicate over-imputation.
+:::
+
+## Normalization
+
+```{r}
+#| label: normalization-conclusion
+#| results: asis
+method <- get_param("normalization", "norm_method", "svr")
+integ <- get_param("normalization", "integ_method", "qc_mean")
+pos_vars <- status_value("norm", "POS", "variables")
+neg_vars <- status_value("norm", "NEG", "variables")
+pos_mv <- status_value("norm", "POS", "missing_fraction")
+neg_mv <- status_value("norm", "NEG", "missing_fraction")
+callout(
+  "Normalization conclusion",
+  paste0(
+    "Signal normalization used ", highlight_numbers(toupper(method)),
+    "; ", highlight_numbers(integration_label()), ". ",
+    "The normalized objects contain ", highlight_numbers(c(paste(fmt_int(pos_vars), "POS features"), paste(fmt_int(neg_vars), "NEG features"))),
+    " with missing-value fractions of ",
+    highlight_numbers(c(paste0("POS ", fmt_pct(pos_mv)), paste0("NEG ", fmt_pct(neg_mv)))), "."
+  )
+)
+```
+
+```{r normalization-table}
+norm_tbl <- status_table |>
+  filter(step_id %in% c("impute", "norm")) |>
+  select(mode, step, samples, variables, missing_values, missing_fraction)
+knitr::kable(
+  norm_tbl |>
+    mutate(missing_fraction = fmt_pct(missing_fraction)),
+  caption = "Changes after normalization."
+)
+```
+
+::: panel-tabset
+### POS
+
+```{r}
+#| label: norm-pos-plots
+#| fig-height: 6
+obj <- objects_by_step$norm$POS
+if (!is.null(obj)) {
+  color_col <- plot_color_column(obj)
+  p <- massqc::massqc_pca(safe_log_scale(obj, scale = TRUE), color_by = color_col, order_by = "sample_id") +
+    ggtitle(paste0("POS Normalized PCA (colored by ", color_col, ")")) +
+    theme_light()
+  render_report_plot(p, obj)
+}
+```
+
+```{r}
+#| label: norm-pos-rsd
+#| fig-height: 5
+obj <- objects_by_step$norm$POS
+if (!is.null(obj)) {
+  p <- massqc::massqc_cumulative_rsd_plot(obj, rsd_cutoff = 30, color = "black") +
+    ggtitle("POS Normalized Cumulative RSD") +
+    theme_light()
+  render_report_plot(p, obj)
+}
+```
+
+### NEG
+
+```{r}
+#| label: norm-neg-plots
+#| fig-height: 6
+obj <- objects_by_step$norm$NEG
+if (!is.null(obj)) {
+  color_col <- plot_color_column(obj)
+  p <- massqc::massqc_pca(safe_log_scale(obj, scale = TRUE), color_by = color_col, order_by = "sample_id") +
+    ggtitle(paste0("NEG Normalized PCA (colored by ", color_col, ")")) +
+    theme_light()
+  render_report_plot(p, obj)
+}
+```
+
+```{r}
+#| label: norm-neg-rsd
+#| fig-height: 5
+obj <- objects_by_step$norm$NEG
+if (!is.null(obj)) {
+  p <- massqc::massqc_cumulative_rsd_plot(obj, rsd_cutoff = 30, color = "black") +
+    ggtitle("NEG Normalized Cumulative RSD") +
+    theme_light()
+  render_report_plot(p, obj)
+}
+```
+:::
+
+::: {.callout-tip title="Figure Legend" collapse="true"}
+Normalization plots show final PCA structure and cumulative RSD after signal normalization.
+
+- **PCA color**: selected by the group/class rule.
+- **Cumulative RSD**: the y-axis is the percentage of features with RSD below each x-axis threshold.
+- `r plot_mode_label(objects_by_step$norm$POS %||% objects_by_step$norm$NEG)`
+:::
+
+------------------------------------------------------------------------
+
+# Technical Details
+
+::: {.callout-note collapse="true"}
+## Mass Dataset Status
+
+This folded section prints the raw `mass_dataset` status for reproducibility and troubleshooting.
+
+::: panel-tabset
+### POS
+
+```{r}
+#| label: mass-dataset-status-pos
+#| results: asis
+for (i in seq_len(nrow(step_info))) {
+  step_id <- step_info$step_id[[i]]
+  obj <- objects_by_step[[step_id]]$POS
+  cat("\n\n#### ", step_info$step_label[[i]], "\n\n", sep = "")
+  if (is.null(obj)) {
+    cat("*Object not available.*\n")
+  } else {
+    cat("```text\n")
+    cat(paste(capture.output(print(obj)), collapse = "\n"))
+    cat("\n```\n")
+  }
+}
+```
+
+### NEG
+
+```{r}
+#| label: mass-dataset-status-neg
+#| results: asis
+for (i in seq_len(nrow(step_info))) {
+  step_id <- step_info$step_id[[i]]
+  obj <- objects_by_step[[step_id]]$NEG
+  cat("\n\n#### ", step_info$step_label[[i]], "\n\n", sep = "")
+  if (is.null(obj)) {
+    cat("*Object not available.*\n")
+  } else {
+    cat("```text\n")
+    cat(paste(capture.output(print(obj)), collapse = "\n"))
+    cat("\n```\n")
+  }
+}
+```
+:::
+:::
+
+------------------------------------------------------------------------
+
+# Citation
+
+Please cite the following papers if you use MetMiner in your research:
+
+> **MetMiner**: Wang, X., Liang, S., Yang, W., Yu, K., Liang, F., Zhao, B., Zhu, X., Zhou, C., Mur, L.A.J., Roberts, J.A., Zhang, J., Zhang, X., 2024.
+> MetMiner: A user-friendly pipeline for large-scale plant metabolomics data analysis.
+> *J. Integr. Plant Biol.* 66, 2329-2345.
+> [doi:10.1111/jipb.13774](https://doi.org/10.1111/jipb.13774)
+
+> **TidyMass2**: Wang, X., Liu, Y., Jiang, C., Huang, Z., Yan, H., Wong, S.H., Johnson, C.H., Zhang, J., Ge, Y., Zhang, F., Zhang, J., Lai, R., Gao, P., Zhang, X., Shen, X., 2026.
+> TidyMass2: advancing LC-MS untargeted metabolomics through metabolite origin inference and metabolic feature-based functional module analysis.
+> *Nat. Commun.* 17, 1755.
+> [doi:10.1038/s41467-026-68464-7](https://doi.org/10.1038/s41467-026-68464-7)
+
+<br> <br>
+
+::: {.column-screen-inset style="background-color: #f8f9fa; padding: 20px; text-align: center; border-top: 1px solid #dee2e6;"}
+<small style="color: #6c757d;"> © 2024-2025 **MetMiner** | State Key Laboratory of Crop Stress Adaptation and Improvement<br> Henan University, Kaifeng 475004, China </small>
+:::
